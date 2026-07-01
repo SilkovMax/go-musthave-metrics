@@ -9,11 +9,11 @@ import (
 
 
 type UpdateHandler struct {
-	storage *repository.MemStorage
+	storage repository.Storage
 }
 
 
-func NewUpdateHandler(storage *repository.MemStorage) *UpdateHandler {
+func NewUpdateHandler(storage repository.Storage) *UpdateHandler {
 	return &UpdateHandler{storage: storage}
 }
 
