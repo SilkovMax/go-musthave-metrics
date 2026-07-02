@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"time"
 
@@ -9,20 +10,32 @@ import (
 
 func main() {
 
+	address := flag.String("a", "localhost:8080", "address and port to run server")
+	reportInterval := flag.Int("r", 10, "report interval in seconds")
+	pollInterval := flag.Int("p", 2, "poll interval in seconds")
+
+
+	flag.Parse()
+
+
 	col := agent.NewCollector()
 
 
-	client := agent.NewClient("http://localhost:8080")
+	serverURL := fmt.Sprintf("http://%s", *address)
+	client := agent.NewClient(serverURL)
 
 
-	pollInterval := 2 * time.Second
-	reportInterval := 10 * time.Second
+	pollDuration := time.Duration(*pollInterval) * time.Second
+	reportDuration := time.Duration(*reportInterval) * time.Second
+
 
 	// Сколько обновлений должно пройти между отправками
-	reportEvery := int(reportInterval / pollInterval)
+	reportEvery := int(reportDuration / pollDuration)
 	counter := 0
 
-	fmt.Println("Агент запущен")
+
+	fmt.Printf("Агент запущен. Сервер: %s, poll: %ds, report: %ds\n", *address, *pollInterval, *reportInterval)
+
 
 	for {
 		col.Update()
@@ -52,6 +65,6 @@ func main() {
 			counter = 0
 		}
 
-		time.Sleep(pollInterval)
+		time.Sleep(pollDuration)
 	}
 }

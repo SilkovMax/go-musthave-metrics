@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/http"
 
@@ -12,6 +13,11 @@ import (
 )
 
 func main() {
+	//add flag on adress + port
+	address := flag.String("a", "localhost:8080", "address and port to run server")
+
+	flag.Parse()
+
 	storage := repository.NewMemStorage()
 
 	r :=chi.NewRouter()
@@ -25,8 +31,8 @@ func main() {
 
 
 
-	fmt.Println("Сервер запущен на http://localhost:8080")
-	err := http.ListenAndServe(":8080", r)
+	fmt.Printf("Сервер запущен на http://%s\n", *address)
+	err := http.ListenAndServe(*address, r)
 	if err != nil {
 		fmt.Printf("Ошибка запуска сервера: %v\n", err)
 	}
