@@ -25,7 +25,7 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 
 	contentType := r.Header.Get("Content-Type")
-	if contentType != "text/plain" {
+	if contentType != "" && contentType != "text/plain" {
 		http.Error(w, "Invalid Content-Type", http.StatusBadRequest)
 		return
 	}
