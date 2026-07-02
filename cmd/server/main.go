@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
+
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
@@ -11,17 +14,19 @@ import (
 func main() {
 	storage := repository.NewMemStorage()
 
-	updateHandler := handler.NewUpdateHandler(storage)
+	r :=chi.NewRouter()
 
-	// сразу mux, мне понравилось
-	mux := http.NewServeMux()
+	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage).ServeHTTP)
+
+	r.Get("/value/{type}/{name}", handler.NewValueHandler(storage).ServeHTTP)
+
+	r.Get("/", handler.NewIndexHandler(storage).ServeHTTP)
 
 
-	mux.Handle("/update/", updateHandler)
 
 
 	fmt.Println("Сервер запущен на http://localhost:8080")
-	err := http.ListenAndServe(":8080", mux)
+	err := http.ListenAndServe(":8080", r)
 	if err != nil {
 		fmt.Printf("Ошибка запуска сервера: %v\n", err)
 	}

@@ -20,4 +20,13 @@ func (s *MemStorage) SetGauge(name string, value float64) {
 
 func (s *MemStorage) IncrementCounter(name string, delta int64) {
 	s.counters[name] += delta
+
+}
+
+func (s *MemStorage) GetAllGauges() map[string]float64  {
+	return s.gauges
+}
+
+func (s *MemStorage) GetAllCounters() map[string]int64 {
+	return s.counters
 }

@@ -3,7 +3,9 @@ package handler
 import (
 	"net/http"
 	"strconv"
-	"strings"
+
+	"github.com/go-chi/chi/v5"
+
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
@@ -20,10 +22,7 @@ func NewUpdateHandler(storage repository.Storage) *UpdateHandler {
 
 func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+
 
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "text/plain" {
@@ -31,19 +30,12 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// разбиваем на части
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 
-
-	if len(parts) != 4 {
-		http.Error(w, "Not found", http.StatusNotFound)
-		return
-	}
 
 	// Извлекаем части URL
-	metricType := parts[1]
-	metricName := parts[2]
-	valueStr := parts[3]
+	metricType := chi.URLParam(r, "type")
+	metricName := chi.URLParam(r, "name")
+	valueStr := chi.URLParam(r, "value")
 
 	// Проверяем есть ли метрика
 	if metricName == "" {

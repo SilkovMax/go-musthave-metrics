@@ -2,19 +2,21 @@ package agent
 
 import (
 	"fmt"
-	"net/http"
 	"strconv"
+
+	"github.com/go-resty/resty/v2"
+
 )
 
 type Client struct {
 	baseURL    string
-	httpClient *http.Client
+	client *resty.Client
 }
 
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL:    baseURL,
-		httpClient: &http.Client{},
+		client: resty.New(),
 	}
 }
 
@@ -22,20 +24,16 @@ func NewClient(baseURL string) *Client {
 func (c *Client) SendGauge(name string, value float64) error {
 	url := fmt.Sprintf("%s/update/gauge/%s/%s", c.baseURL, name, strconv.FormatFloat(value, 'f', -1, 64))
 
-	req, err := http.NewRequest("POST", url, nil)
+	resp, err := c.client.R().
+		SetHeader("Content-Type", "text/plain").
+		Post(url)
+
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "text/plain")
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status code: %d", resp.StatusCode)
+	if resp.StatusCode() != 200 {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
 	}
 
 	return nil
@@ -45,20 +43,16 @@ func (c *Client) SendGauge(name string, value float64) error {
 func (c *Client) SendCounter(name string, value int64) error {
 	url := fmt.Sprintf("%s/update/counter/%s/%s", c.baseURL, name, strconv.FormatInt(value, 10))
 
-	req, err := http.NewRequest("POST", url, nil)
+	resp, err := c.client.R().
+		SetHeader("Content-Type", "text/plain").
+		Post(url)
+
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "text/plain")
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status code: %d", resp.StatusCode)
+	if resp.StatusCode() != 200 {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
 	}
 
 	return nil
