@@ -17,6 +17,12 @@ func main() {
 
 	flag.Parse()
 
+	// Валидация интервалов
+	if *reportInterval <= 0 || *pollInterval <= 0 {
+		fmt.Println("Интервалы должны быть больше нуля")
+		return
+	}
+
 
 	col := agent.NewCollector()
 
@@ -29,21 +35,23 @@ func main() {
 	reportDuration := time.Duration(*reportInterval) * time.Second
 
 
-	// Сколько обновлений должно пройти между отправками
-	reportEvery := int(reportDuration / pollDuration)
-	counter := 0
+	// Создаем два тикера
+	pollTicker := time.NewTicker(pollDuration)
+	reportTicker := time.NewTicker(reportDuration)
+
+	defer pollTicker.Stop()
+	defer reportTicker.Stop()
 
 
 	fmt.Printf("Агент запущен. Сервер: %s, poll: %ds, report: %ds\n", *address, *pollInterval, *reportInterval)
 
-
 	for {
-		col.Update()
-		fmt.Println("Метрики обновлены")
+		select {
+		case <-pollTicker.C:
+			col.Update()
+			fmt.Println("Метрики обновлены")
 
-		counter++
-
-		if counter >= reportEvery {
+		case <-reportTicker.C:
 			fmt.Println("Отправка метрик на сервер")
 
 			for name, value := range col.GetGauges() {
@@ -61,10 +69,8 @@ func main() {
 			}
 
 			fmt.Println("Метрики отправлены")
-
-			counter = 0
 		}
-
-		time.Sleep(pollDuration)
 	}
+
+
 }

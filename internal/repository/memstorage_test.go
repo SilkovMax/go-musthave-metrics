@@ -1,6 +1,10 @@
 package repository
 
-import "testing"
+import (
+	"fmt"
+	"sync"
+	"testing"
+)
 
 func TestNewMemStorage(t *testing.T) {
 	storage := NewMemStorage()
@@ -120,5 +124,35 @@ func TestGetAllCounters(t *testing.T) {
 	}
 	if counters["errors"] != 2 {
 		t.Errorf("errors: ожидалось 2, получено %v", counters["errors"])
+	}
+}
+
+
+// TestMemStorageConcurrency проверяет, что хранилище безопасно при конкуренции
+func TestMemStorageConcurrency(t *testing.T) {
+	storage := NewMemStorage()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			name := fmt.Sprintf("metric_%d", id)
+			storage.SetGauge(name, float64(id))
+			storage.IncrementCounter("total", 1)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Проверяем, что данные сохранились корректно
+	counters := storage.GetAllCounters()
+	if counters["total"] != 100 {
+		t.Errorf("Ожидалось 100, получено %d", counters["total"])
+	}
+
+	gauges := storage.GetAllGauges()
+	if len(gauges) != 100 {
+		t.Errorf("Ожидалось 100 gauge-метрик, получено %d", len(gauges))
 	}
 }
