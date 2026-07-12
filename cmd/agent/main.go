@@ -3,9 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/agent"
+
+	"os"
 )
 
 func main() {
@@ -16,6 +19,41 @@ func main() {
 
 
 	flag.Parse()
+
+	// add Env and check if ""
+	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
+		*address = envAddress
+	}
+
+
+	if envRepInterval := os.Getenv("REPORT_INTERVAL"); envRepInterval != "" {
+
+		if val,err := strconv.Atoi(envRepInterval); err== nil {
+			*reportInterval = val
+
+		} else {
+
+			fmt.Println("Некорректное значение переменной , ввели не число")
+		}
+
+	}
+
+
+
+
+
+	if envPollInterval := os.Getenv("POLL_INTERVAL"); envPollInterval != "" {
+
+		if val,err := strconv.Atoi(envPollInterval); err== nil {
+			*pollInterval = val
+
+		} else {
+
+			fmt.Println("Некорректное значение переменной , ввели не число")
+		}
+
+	}
+
 
 	// Валидация интервалов
 	if *reportInterval <= 0 || *pollInterval <= 0 {

@@ -10,13 +10,20 @@ import (
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
+
+	"os"
 )
 
 func main() {
-	//add flag on adress + port
+	//add flag on address + port
 	address := flag.String("a", "localhost:8080", "address and port to run server")
 
 	flag.Parse()
+
+	// add Env and check if ""
+	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
+		*address = envAddress
+	}
 
 	storage := repository.NewMemStorage()
 
