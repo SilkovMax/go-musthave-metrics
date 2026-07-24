@@ -126,8 +126,14 @@ func main() {
 	//запускаю логировангие для каждого запроса
 	r.Use(LoggingMiddleware)
 
-	r.Post("/update/", handler.NewUpdateJSONHandler(storage).ServeHTTP)
-	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP)
+
+
+	r.Post("/update", handler.NewUpdateJSONHandler(storage).ServeHTTP)
+	r.Post("/update/", handler.NewUpdateJSONHandler(storage).ServeHTTP)//для автотеста
+
+
+	r.Post("/value", handler.NewValueJSONHandler(storage).ServeHTTP)
+	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP) //для автотеста
 
 	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage).ServeHTTP)
 
