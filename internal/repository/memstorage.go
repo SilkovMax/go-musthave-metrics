@@ -1,7 +1,9 @@
 package repository
 
-import "sync"
-
+import (
+	"sync"
+	"errors"
+)
 
 type MemStorage struct {
 	mu sync.RWMutex  // RWMutex лучше, обчного Mu, т.к. читать могут многие с помощью  RW
@@ -52,4 +54,26 @@ func (s *MemStorage) GetAllCounters() map[string]int64 {
 	}
 
 	return result
+}
+
+func (s *MemStorage) GetGauge(name string) (float64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	val, ok := s.gauges[name]
+	if !ok {
+		return 0, errors.New("metric not found")
+	}
+	return val, nil
+}
+
+func (s *MemStorage) GetCounter(name string) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	val, ok := s.counters[name]
+	if !ok {
+		return 0, errors.New("metric not found")
+	}
+	return val, nil
 }

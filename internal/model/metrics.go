@@ -1,4 +1,5 @@
-package models
+package model
+
 
 const (
 	Counter = "counter"

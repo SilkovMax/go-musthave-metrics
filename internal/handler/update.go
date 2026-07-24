@@ -3,10 +3,12 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"encoding/json"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
+	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
 
 
@@ -70,4 +72,42 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 
 
+}
+
+
+type UpdateJSONHandler struct {
+	storage repository.Storage
+}
+
+func NewUpdateJSONHandler(storage repository.Storage) *UpdateJSONHandler {
+	return &UpdateJSONHandler{storage: storage}
+}
+
+func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	var m model.Metrics
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	switch m.MType {
+	case model.Gauge:
+		if m.Value != nil {
+			h.storage.SetGauge(m.ID, *m.Value)
+		}
+	case model.Counter:
+		if m.Delta != nil {
+			h.storage.IncrementCounter(m.ID, *m.Delta)
+		}
+	default:
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

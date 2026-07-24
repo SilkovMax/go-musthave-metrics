@@ -3,8 +3,11 @@ package agent
 import (
 	"fmt"
 	"strconv"
+	"net/http"
 
 	"github.com/go-resty/resty/v2"
+
+	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 
 )
 
@@ -52,6 +55,23 @@ func (c *Client) SendCounter(name string, value int64) error {
 	}
 
 	if resp.StatusCode() != 200 {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+	}
+
+	return nil
+}
+
+func (c *Client) SendMetric(m model.Metrics) error {
+	resp, err := c.client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(m).
+		Post(c.baseURL + "/update")
+
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+
+	if resp.StatusCode() != http.StatusOK {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
 	}
 
