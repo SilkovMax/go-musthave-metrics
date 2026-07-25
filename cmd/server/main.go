@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 
 	"github.com/go-chi/chi/v5"
@@ -14,12 +13,14 @@ import (
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
+	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
 
 
 )
 
 
 var Log *zap.Logger = zap.NewNop()
+
 
 // Initialize инициализирует синглтон логера с необходимым уровнем логирования.
 func Initialize(level string) error {
@@ -41,60 +42,6 @@ func Initialize(level string) error {
     Log = zl
     return nil
 }
-
-
-type responseData struct {
-	status int
-	size   int
-}
-
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	responseData *responseData
-}
-
-
-func (r *loggingResponseWriter) Write(b []byte) (int, error) {
-	size, err := r.ResponseWriter.Write(b)
-	r.responseData.size += size //  размер ответа
-	return size, err
-}
-
-func (r *loggingResponseWriter) WriteHeader(statusCode int) {
-	r.ResponseWriter.WriteHeader(statusCode)
-	r.responseData.status = statusCode
-}
-
-
-func LoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		// По умолчанию 200 OK
-		resData := &responseData{
-			status: http.StatusOK,
-			size:   0,
-		}
-
-		lw := &loggingResponseWriter{
-			ResponseWriter: w,
-			responseData:   resData,
-		}
-
-		next.ServeHTTP(lw, r)
-
-		duration := time.Since(start)
-
-		Log.Info("HTTP request data",
-			zap.String("uri", r.RequestURI),
-			zap.String("method", r.Method),
-			zap.Duration("duration", duration),
-			zap.Int("status", resData.status),
-			zap.Int("size", resData.size),
-		)
-	})
-}
-
 
 
 func main() {
@@ -123,8 +70,10 @@ func main() {
 
 	r :=chi.NewRouter()
 
+	r.Use(middleware.GzipMiddleware)
+
 	//запускаю логировангие для каждого запроса
-	r.Use(LoggingMiddleware)
+	r.Use(middleware.LoggingMiddleware(Log))
 
 
 

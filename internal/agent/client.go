@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"net/http"
+	"compress/gzip"
+	"encoding/json"
+
 
 	"github.com/go-resty/resty/v2"
 
@@ -61,10 +65,32 @@ func (c *Client) SendCounter(name string, value int64) error {
 	return nil
 }
 
+//SendMetrics отправляем в Json Формате с gzip
 func (c *Client) SendMetric(m model.Metrics) error {
+
+	jsonData, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metric: %w", err)
+	}
+
+	// Сжимаем JSON в буфер в памяти
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+
+	if _, err := gw.Write(jsonData); err != nil {
+		return fmt.Errorf("failed to compress data: %w", err)
+	}
+
+	if err := gw.Close(); err != nil {
+		return fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+
 	resp, err := c.client.R().
 		SetHeader("Content-Type", "application/json").
-		SetBody(m).
+		SetHeader("Content-Encoding", "gzip").
+		SetHeader("Accept-Encoding", "gzip").
+		SetBody(&buf).
 		Post(c.baseURL + "/update")
 
 	if err != nil {
