@@ -19,7 +19,7 @@ func setupUpdateRouter(storage repository.Storage) *chi.Mux {
 
 // TestUpdateHandlerSuccessGauge проверяет успешный запрос gauge
 func TestUpdateHandlerSuccessGauge(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupUpdateRouter(storage)
 
 	req := httptest.NewRequest("POST", "/update/gauge/cpu/45.5", nil)
@@ -35,7 +35,7 @@ func TestUpdateHandlerSuccessGauge(t *testing.T) {
 
 // TestUpdateHandlerSuccessCounter проверяет успешный запрос counter
 func TestUpdateHandlerSuccessCounter(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupUpdateRouter(storage)
 
 	req := httptest.NewRequest("POST", "/update/counter/requests/5", nil)
@@ -51,7 +51,7 @@ func TestUpdateHandlerSuccessCounter(t *testing.T) {
 
 // TestUpdateHandlerWrongMethod проверяет неправильный метод
 func TestUpdateHandlerWrongMethod(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupUpdateRouter(storage)
 
 	req := httptest.NewRequest("GET", "/update/gauge/cpu/45.5", nil)
@@ -66,7 +66,7 @@ func TestUpdateHandlerWrongMethod(t *testing.T) {
 
 // TestUpdateHandlerWrongType проверяет неправильный тип метрики
 func TestUpdateHandlerWrongType(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupUpdateRouter(storage)
 
 	req := httptest.NewRequest("POST", "/update/invalid/cpu/45.5", nil)
@@ -82,7 +82,7 @@ func TestUpdateHandlerWrongType(t *testing.T) {
 
 // TestUpdateHandlerInvalidValue проверяет некорректное значение
 func TestUpdateHandlerInvalidValue(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupUpdateRouter(storage)
 
 	req := httptest.NewRequest("POST", "/update/gauge/cpu/abc", nil)
@@ -98,7 +98,7 @@ func TestUpdateHandlerInvalidValue(t *testing.T) {
 
 // TestUpdateHandlerNotFound проверяет неправильный URL
 func TestUpdateHandlerNotFound(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupUpdateRouter(storage)
 
 	req := httptest.NewRequest("POST", "/update/gauge", nil)

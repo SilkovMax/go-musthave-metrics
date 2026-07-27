@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 
 	"github.com/go-chi/chi/v5"
@@ -49,6 +51,11 @@ func main() {
 	address := flag.String("a", "localhost:8080", "address and port to run server")
 	logLevel := flag.String("l", "info", "log level")
 
+	storeInterval := flag.Int("i", 300, "store interval in seconds")
+	fileStoragePath := flag.String("f", "metrics.json", "file storage path")
+	restore := flag.Bool("r", false, "reatore metrics from file on start app")
+
+
 	flag.Parse()
 
 	// add Env and check if ""
@@ -64,9 +71,31 @@ func main() {
 		panic(fmt.Errorf("failed to initialize logger: %w", err))
 	}
 
+	if envInterval := os.Getenv("STORE_INTERVAL"); envInterval != "" {
+		if val, err := strconv.Atoi(envInterval); err == nil {
+			*storeInterval = val
+		}
+	}
+
+	if envPath := os.Getenv("FILE_STORAGE_PATH"); envPath != "" {
+		*fileStoragePath = envPath
+	}
+	if envRestore := os.Getenv("RESTORE"); envRestore != "" {
+		*restore = (envRestore == "true")
+	}
+
+	if err := Initialize(*logLevel); err != nil {
+    	panic(fmt.Errorf("failed to initialize logger: %w", err))
+	}
+
 	defer Log.Sync()
 
-	storage := repository.NewMemStorage()
+
+	intervalDuration := time.Duration(*storeInterval) * time.Second
+	storage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
+
+
+
 
 	r :=chi.NewRouter()
 

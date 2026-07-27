@@ -20,7 +20,7 @@ func setupIndexRouter(storage repository.Storage) *chi.Mux {
 
 // TestIndexHandlerEmpty проверяет главную страницу без метрик
 func TestIndexHandlerEmpty(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupIndexRouter(storage)
 
 	req := httptest.NewRequest("GET", "/", nil)
@@ -42,7 +42,7 @@ func TestIndexHandlerEmpty(t *testing.T) {
 
 // TestIndexHandlerWithMetrics проверяет главную страницу с метриками
 func TestIndexHandlerWithMetrics(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	storage.SetGauge("cpu", 45.5)
 	storage.IncrementCounter("requests", 10)
 
