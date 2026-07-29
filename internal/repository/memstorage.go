@@ -19,6 +19,7 @@ type MemStorage struct {
 
 	filepath string
 	interval time.Duration
+	stopCh chan struct{}
 
 }
 
@@ -28,6 +29,7 @@ func NewMemStorage(filepath string, interval time.Duration, restore bool) *MemSt
 		counters: make(map[string]int64),
 		filepath: filepath,
 		interval: interval,
+		stopCh: make(chan struct{}),
 	}
 
 	if restore && filepath != "" {
@@ -42,11 +44,25 @@ func NewMemStorage(filepath string, interval time.Duration, restore bool) *MemSt
 	return s
 }
 
+func (s *MemStorage) Stop() {
+	close(s.stopCh)
+
+}
+
+
 func (s *MemStorage) backgroundSave() {
 	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
 
-	for range ticker.C {
-		s.SaveToFile()
+	for {
+		select {
+		case <-ticker.C:
+			s.SaveToFile()
+		case <-s.stopCh:
+			return
+
+		}
+
 	}
 }
 
@@ -65,7 +81,7 @@ func (s *MemStorage) SetGauge(name string, value float64) {
 
 func (s *MemStorage) IncrementCounter(name string, delta int64) {
 	s.mu.Lock()
-	
+
 	s.counters[name] += delta
 	s.mu.Unlock()
 

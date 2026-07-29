@@ -95,7 +95,7 @@ func main() {
 	storage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
 
 
-
+	defer storage.Stop()
 
 	r :=chi.NewRouter()
 
