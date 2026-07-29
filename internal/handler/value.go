@@ -1,15 +1,14 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
-	"encoding/json"
-
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
+	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
 type ValueHandler struct {
@@ -57,7 +56,6 @@ func (h *ValueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
-
 
 type ValueJSONHandler struct {
 	storage repository.Storage

@@ -1,38 +1,31 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
-	"encoding/json"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
+	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
-
 
 type UpdateHandler struct {
 	storage repository.Storage
 }
 
-
 func NewUpdateHandler(storage repository.Storage) *UpdateHandler {
 	return &UpdateHandler{storage: storage}
 }
 
-
 func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-
-
 
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "" && contentType != "text/plain" {
 		http.Error(w, "Invalid Content-Type", http.StatusBadRequest)
 		return
 	}
-
-
 
 	// Извлекаем части URL
 	metricType := chi.URLParam(r, "type")
@@ -71,9 +64,7 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("{}")) //Для автотестов
 
-
 }
-
 
 type UpdateJSONHandler struct {
 	storage repository.Storage

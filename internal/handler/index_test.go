@@ -37,7 +37,6 @@ func TestIndexHandlerEmpty(t *testing.T) {
 		t.Errorf("Ожидался Content-Type text/html, получен %s", contentType)
 	}
 
-
 }
 
 // TestIndexHandlerWithMetrics проверяет главную страницу с метриками

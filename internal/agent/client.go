@@ -2,28 +2,26 @@ package agent
 
 import (
 	"bytes"
-	"fmt"
-	"strconv"
-	"net/http"
 	"compress/gzip"
 	"encoding/json"
-
+	"fmt"
+	"net/http"
+	"strconv"
 
 	"github.com/go-resty/resty/v2"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
-
 )
 
 type Client struct {
-	baseURL    string
-	client *resty.Client
+	baseURL string
+	client  *resty.Client
 }
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL:    baseURL,
-		client: resty.New(),
+		baseURL: baseURL,
+		client:  resty.New(),
 	}
 }
 
@@ -65,7 +63,7 @@ func (c *Client) SendCounter(name string, value int64) error {
 	return nil
 }
 
-//SendMetrics отправляем в Json Формате с gzip
+// SendMetrics отправляем в Json Формате с gzip
 func (c *Client) SendMetric(m model.Metrics) error {
 
 	jsonData, err := json.Marshal(m)
@@ -84,7 +82,6 @@ func (c *Client) SendMetric(m model.Metrics) error {
 	if err := gw.Close(); err != nil {
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
-
 
 	resp, err := c.client.R().
 		SetHeader("Content-Type", "application/json").

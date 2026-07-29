@@ -127,7 +127,6 @@ func TestGetAllCounters(t *testing.T) {
 	}
 }
 
-
 // TestMemStorageConcurrency проверяет, что хранилище безопасно при конкуренции
 func TestMemStorageConcurrency(t *testing.T) {
 	storage := NewMemStorage("", 0, false)

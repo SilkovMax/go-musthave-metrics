@@ -1,26 +1,23 @@
 package repository
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
 	"sync"
 	"time"
-	"encoding/json"
-	"os"
-
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
-
 )
 
 type MemStorage struct {
-	mu sync.RWMutex
-	gauges map[string]float64
+	mu       sync.RWMutex
+	gauges   map[string]float64
 	counters map[string]int64
 
 	filepath string
 	interval time.Duration
-	stopCh chan struct{}
-
+	stopCh   chan struct{}
 }
 
 func NewMemStorage(filepath string, interval time.Duration, restore bool) *MemStorage {
@@ -29,13 +26,12 @@ func NewMemStorage(filepath string, interval time.Duration, restore bool) *MemSt
 		counters: make(map[string]int64),
 		filepath: filepath,
 		interval: interval,
-		stopCh: make(chan struct{}),
+		stopCh:   make(chan struct{}),
 	}
 
 	if restore && filepath != "" {
 		s.LoadFromFile()
 	}
-
 
 	if interval > 0 && filepath != "" {
 		go s.backgroundSave()
@@ -48,7 +44,6 @@ func (s *MemStorage) Stop() {
 	close(s.stopCh)
 
 }
-
 
 func (s *MemStorage) backgroundSave() {
 	ticker := time.NewTicker(s.interval)
@@ -65,7 +60,6 @@ func (s *MemStorage) backgroundSave() {
 
 	}
 }
-
 
 func (s *MemStorage) SetGauge(name string, value float64) {
 	s.mu.Lock()
@@ -91,7 +85,7 @@ func (s *MemStorage) IncrementCounter(name string, delta int64) {
 
 }
 
-func (s *MemStorage) GetAllGauges() map[string]float64  {
+func (s *MemStorage) GetAllGauges() map[string]float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -136,8 +130,6 @@ func (s *MemStorage) GetCounter(name string) (int64, error) {
 	}
 	return val, nil
 }
-
-
 
 func (s *MemStorage) GetAllMetrics() []model.Metrics {
 	s.mu.RLock()
