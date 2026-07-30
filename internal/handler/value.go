@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
@@ -53,4 +55,54 @@ func (h *ValueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid metric type", http.StatusNotFound)
 		return
 	}
+}
+
+type ValueJSONHandler struct {
+	storage repository.Storage
+}
+
+func NewValueJSONHandler(storage repository.Storage) *ValueJSONHandler {
+	return &ValueJSONHandler{storage: storage}
+}
+
+func (h *ValueJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	var req model.Metrics
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	resp := model.Metrics{
+		ID:    req.ID,
+		MType: req.MType,
+	}
+
+	switch req.MType {
+	case model.Gauge:
+		val, err := h.storage.GetGauge(req.ID)
+		if err != nil {
+			http.Error(w, "metric not found", http.StatusNotFound)
+			return
+		}
+		resp.Value = &val
+	case model.Counter:
+		val, err := h.storage.GetCounter(req.ID)
+		if err != nil {
+			http.Error(w, "metric not found", http.StatusNotFound)
+			return
+		}
+		resp.Delta = &val
+	default:
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }

@@ -20,7 +20,7 @@ func setupValueRouter(storage repository.Storage) *chi.Mux {
 
 // TestValueHandlerGaugeFound проверяет получение существующей gauge-метрики
 func TestValueHandlerGaugeFound(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	storage.SetGauge("cpu", 45.5)
 
 	router := setupValueRouter(storage)
@@ -42,7 +42,7 @@ func TestValueHandlerGaugeFound(t *testing.T) {
 
 // TestValueHandlerCounterFound проверяет получение существующей counter-метрики
 func TestValueHandlerCounterFound(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	storage.IncrementCounter("requests", 10)
 
 	router := setupValueRouter(storage)
@@ -64,7 +64,7 @@ func TestValueHandlerCounterFound(t *testing.T) {
 
 // TestValueHandlerNotFound проверяет получение несуществующей метрики
 func TestValueHandlerNotFound(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupValueRouter(storage)
 
 	req := httptest.NewRequest("GET", "/value/gauge/nonexistent", nil)
@@ -79,7 +79,7 @@ func TestValueHandlerNotFound(t *testing.T) {
 
 // TestValueHandlerWrongType проверяет неправильный тип метрики
 func TestValueHandlerWrongType(t *testing.T) {
-	storage := repository.NewMemStorage()
+	storage := repository.NewMemStorage("", 0, false)
 	router := setupValueRouter(storage)
 
 	req := httptest.NewRequest("GET", "/value/invalid/cpu", nil)

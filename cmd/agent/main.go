@@ -3,9 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/agent"
+	"github.com/SilkovMax/go-musthave-metrics/internal/model"
+
+	"os"
 )
 
 func main() {
@@ -14,8 +18,36 @@ func main() {
 	reportInterval := flag.Int("r", 10, "report interval in seconds")
 	pollInterval := flag.Int("p", 2, "poll interval in seconds")
 
-
 	flag.Parse()
+
+	// add Env and check if ""
+	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
+		*address = envAddress
+	}
+
+	if envRepInterval := os.Getenv("REPORT_INTERVAL"); envRepInterval != "" {
+
+		if val, err := strconv.Atoi(envRepInterval); err == nil {
+			*reportInterval = val
+
+		} else {
+
+			fmt.Println("Некорректное значение переменной , ввели не число")
+		}
+
+	}
+
+	if envPollInterval := os.Getenv("POLL_INTERVAL"); envPollInterval != "" {
+
+		if val, err := strconv.Atoi(envPollInterval); err == nil {
+			*pollInterval = val
+
+		} else {
+
+			fmt.Println("Некорректное значение переменной , ввели не число")
+		}
+
+	}
 
 	// Валидация интервалов
 	if *reportInterval <= 0 || *pollInterval <= 0 {
@@ -23,17 +55,13 @@ func main() {
 		return
 	}
 
-
 	col := agent.NewCollector()
-
 
 	serverURL := fmt.Sprintf("http://%s", *address)
 	client := agent.NewClient(serverURL)
 
-
 	pollDuration := time.Duration(*pollInterval) * time.Second
 	reportDuration := time.Duration(*reportInterval) * time.Second
-
 
 	// Создаем два тикера
 	pollTicker := time.NewTicker(pollDuration)
@@ -41,7 +69,6 @@ func main() {
 
 	defer pollTicker.Stop()
 	defer reportTicker.Stop()
-
 
 	fmt.Printf("Агент запущен. Сервер: %s, poll: %ds, report: %ds\n", *address, *pollInterval, *reportInterval)
 
@@ -55,15 +82,23 @@ func main() {
 			fmt.Println("Отправка метрик на сервер")
 
 			for name, value := range col.GetGauges() {
-				err := client.SendGauge(name, value)
-				if err != nil {
+				m := model.Metrics{
+					ID:    name,
+					MType: model.Gauge,
+					Value: &value,
+				}
+				if err := client.SendMetric(m); err != nil {
 					fmt.Printf("Ошибка отправки gauge %s: %v\n", name, err)
 				}
 			}
 
 			for name, value := range col.GetCounters() {
-				err := client.SendCounter(name, value)
-				if err != nil {
+				m := model.Metrics{
+					ID:    name,
+					MType: model.Counter,
+					Delta: &value,
+				}
+				if err := client.SendMetric(m); err != nil {
 					fmt.Printf("Ошибка отправки counter %s: %v\n", name, err)
 				}
 			}
@@ -71,6 +106,5 @@ func main() {
 			fmt.Println("Метрики отправлены")
 		}
 	}
-
 
 }

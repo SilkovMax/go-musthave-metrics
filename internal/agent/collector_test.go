@@ -80,12 +80,10 @@ func TestCollectorRandomValue(t *testing.T) {
 	col.Update()
 	gauges := col.GetGauges()
 
-
 	// Проверяем, что RandomValue существует
 	if _, exists := gauges["RandomValue"]; !exists {
 		t.Fatalf("RandomValue не найден в gauges")
 	}
-
 
 }
 

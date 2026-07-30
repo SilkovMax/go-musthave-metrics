@@ -1,36 +1,31 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
-
 
 type UpdateHandler struct {
 	storage repository.Storage
 }
 
-
 func NewUpdateHandler(storage repository.Storage) *UpdateHandler {
 	return &UpdateHandler{storage: storage}
 }
 
-
 func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-
-
 
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "" && contentType != "text/plain" {
 		http.Error(w, "Invalid Content-Type", http.StatusBadRequest)
 		return
 	}
-
-
 
 	// Извлекаем части URL
 	metricType := chi.URLParam(r, "type")
@@ -67,7 +62,43 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	w.Write([]byte("{}")) //Для автотестов
 
+}
 
+type UpdateJSONHandler struct {
+	storage repository.Storage
+}
+
+func NewUpdateJSONHandler(storage repository.Storage) *UpdateJSONHandler {
+	return &UpdateJSONHandler{storage: storage}
+}
+
+func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		return
+	}
+
+	var m model.Metrics
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	switch m.MType {
+	case model.Gauge:
+		if m.Value != nil {
+			h.storage.SetGauge(m.ID, *m.Value)
+		}
+	case model.Counter:
+		if m.Delta != nil {
+			h.storage.IncrementCounter(m.ID, *m.Delta)
+		}
+	default:
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }

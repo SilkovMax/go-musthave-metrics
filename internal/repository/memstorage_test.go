@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewMemStorage(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 
 	if storage == nil {
 		t.Fatalf("NewMemStorage() вернул nil")
@@ -22,7 +22,7 @@ func TestNewMemStorage(t *testing.T) {
 }
 
 func TestSetGauge(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 
 	storage.SetGauge("cpu", 45.5)
 
@@ -32,7 +32,7 @@ func TestSetGauge(t *testing.T) {
 }
 
 func TestSetGaugeOverwrite(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 
 	storage.SetGauge("cpu", 45.5)
 
@@ -44,7 +44,7 @@ func TestSetGaugeOverwrite(t *testing.T) {
 }
 
 func TestIncrementCounter(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 
 	storage.IncrementCounter("requests", 1)
 
@@ -60,7 +60,7 @@ func TestIncrementCounter(t *testing.T) {
 }
 
 func TestMultipleMetrics(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 
 	storage.SetGauge("cpu", 45.5)
 	storage.SetGauge("memory", 80.2)
@@ -88,7 +88,7 @@ func TestMultipleMetrics(t *testing.T) {
 }
 
 func TestGetAllGauges(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 
 	storage.SetGauge("cpu", 45.5)
 	storage.SetGauge("memory", 80.2)
@@ -108,7 +108,7 @@ func TestGetAllGauges(t *testing.T) {
 }
 
 func TestGetAllCounters(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 
 	storage.IncrementCounter("requests", 10)
 	storage.IncrementCounter("errors", 2)
@@ -127,10 +127,9 @@ func TestGetAllCounters(t *testing.T) {
 	}
 }
 
-
 // TestMemStorageConcurrency проверяет, что хранилище безопасно при конкуренции
 func TestMemStorageConcurrency(t *testing.T) {
-	storage := NewMemStorage()
+	storage := NewMemStorage("", 0, false)
 	var wg sync.WaitGroup
 
 	for i := 0; i < 100; i++ {
