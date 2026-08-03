@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
@@ -48,6 +50,8 @@ func main() {
 	fileStoragePath := flag.String("f", "metrics.json", "file storage path")
 	restore := flag.Bool("r", false, "reatore metrics from file on start app")
 
+	databaseDSN := flag.String("d", "", "connect to DB")
+
 	flag.Parse()
 
 	// add Env and check if ""
@@ -79,7 +83,23 @@ func main() {
 		}
 	}
 
+	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
+		*databaseDSN = envDSN
+	}
+
 	defer Log.Sync()
+
+	var sqlDB *sql.DB
+
+	if *databaseDSN != "" {
+		var err error
+		sqlDB, err = db.New(*databaseDSN)
+		if err != nil {
+			Log.Fatal("Ошибка подключения к базе данных", zap.Error(err))
+		}
+		defer sqlDB.Close()
+		Log.Info("Успешно подключено к PostgreSQL")
+	}
 
 	intervalDuration := time.Duration(*storeInterval) * time.Second
 	storage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
@@ -92,6 +112,18 @@ func main() {
 
 	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))
+
+
+
+	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
+		if sqlDB != nil {
+			if err := sqlDB.Ping(); err != nil {
+				http.Error(w, "database ping failed", http.StatusInternalServerError)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	})
 
 	r.Post("/update", handler.NewUpdateJSONHandler(storage).ServeHTTP)
 	r.Post("/update/", handler.NewUpdateJSONHandler(storage).ServeHTTP) //для автотеста
