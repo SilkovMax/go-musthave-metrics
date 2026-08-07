@@ -91,6 +91,9 @@ func main() {
 
 	var sqlDB *sql.DB
 
+	var storage repository.Storage
+
+
 	if *databaseDSN != "" {
 		var err error
 		sqlDB, err = db.New(*databaseDSN)
@@ -98,13 +101,19 @@ func main() {
 			Log.Fatal("Ошибка подключения к базе данных", zap.Error(err))
 		}
 		defer sqlDB.Close()
+		storage = repository.NewDBStorage(sqlDB)
 		Log.Info("Успешно подключено к PostgreSQL")
+	} else {
+
+		intervalDuration := time.Duration(*storeInterval) * time.Second
+		memStorage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
+
+		storage = memStorage
+		defer memStorage.Stop()
+		Log.Info("Используется файловое хранилище")
 	}
 
-	intervalDuration := time.Duration(*storeInterval) * time.Second
-	storage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
 
-	defer storage.Stop()
 
 	r := chi.NewRouter()
 
