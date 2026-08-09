@@ -198,3 +198,19 @@ func (s *MemStorage) LoadFromFile() error {
 	s.RestoreMetrics(metrics)
 	return nil
 }
+
+func (s *MemStorage) SetBatch(metrics []model.Metrics) error {
+	for _, m := range metrics {
+		switch m.MType {
+		case "gauge":
+			if m.Value != nil {
+				s.SetGauge(m.ID, *m.Value)
+			}
+		case "counter":
+			if m.Delta != nil {
+				s.IncrementCounter(m.ID, *m.Delta)
+			}
+		}
+	}
+	return nil
+}
