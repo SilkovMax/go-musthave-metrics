@@ -79,32 +79,36 @@ func main() {
 			fmt.Println("Метрики обновлены")
 
 		case <-reportTicker.C:
-			fmt.Println("Отправка метрик на сервер")
+			fmt.Println("Отправка метрик на сервер (batch)")
+
+
+			var batch []model.Metrics
 
 			for name, value := range col.GetGauges() {
-				m := model.Metrics{
+				v := value
+				batch = append(batch, model.Metrics{
 					ID:    name,
 					MType: model.Gauge,
-					Value: &value,
-				}
-				if err := client.SendMetric(m); err != nil {
-					fmt.Printf("Ошибка отправки gauge %s: %v\n", name, err)
-				}
+					Value: &v,
+				})
 			}
 
 			for name, value := range col.GetCounters() {
-				m := model.Metrics{
+				v := value
+				batch = append(batch, model.Metrics{
 					ID:    name,
 					MType: model.Counter,
-					Delta: &value,
-				}
-				if err := client.SendMetric(m); err != nil {
-					fmt.Printf("Ошибка отправки counter %s: %v\n", name, err)
-				}
+					Delta: &v,
+				})
+			}
+
+			if err := client.SendBatch(batch); err != nil {
+				fmt.Printf("Ошибка batch-отправки: %v\n", err)
+			} else {
+				fmt.Printf("Отправлено метрик: %d\n", len(batch))
+			}
 			}
 
 			fmt.Println("Метрики отправлены")
 		}
 	}
-
-}

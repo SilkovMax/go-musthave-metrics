@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+
+	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
 
 type DBStorage struct {
@@ -100,4 +102,51 @@ func (s *DBStorage) GetAllCounters() map[string]int64 {
 		result[name] = value
 	}
 	return result
+}
+
+func (s *DBStorage) SetBatch(metrics []model.Metrics) error {
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	gaugeStmt, err := tx.Prepare(`INSERT INTO gauges (name, value) VALUES ($1, $2)
+	                              ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("prepare gauge stmt: %w", err)
+	}
+	defer gaugeStmt.Close()
+
+	counterStmt, err := tx.Prepare(`INSERT INTO counters (name, value) VALUES ($1, $2)
+	                                ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`)
+	if err != nil {
+		tx.Rollback()
+		return fmt.Errorf("prepare counter stmt: %w", err)
+	}
+	defer counterStmt.Close()
+
+	for _, m := range metrics {
+		switch m.MType {
+		case "gauge":
+			if m.Value == nil {
+				continue // пропускаем битые данные
+			}
+			if _, err := gaugeStmt.Exec(m.ID, *m.Value); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("exec gauge %s: %w", m.ID, err)
+			}
+		case "counter":
+			if m.Delta == nil {
+				continue
+			}
+			if _, err := counterStmt.Exec(m.ID, *m.Delta); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("exec counter %s: %w", m.ID, err)
+			}
+		}
+	}
+
+	return tx.Commit()
 }

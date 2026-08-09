@@ -137,6 +137,9 @@ func main() {
 	r.Post("/update", handler.NewUpdateJSONHandler(storage).ServeHTTP)
 	r.Post("/update/", handler.NewUpdateJSONHandler(storage).ServeHTTP) //для автотеста
 
+	r.Post("/updates", handler.NewUpdatesHandler(storage).ServeHTTP)
+	r.Post("/updates/", handler.NewUpdatesHandler(storage).ServeHTTP)
+
 	r.Post("/value", handler.NewValueJSONHandler(storage).ServeHTTP)
 	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP) //для автотеста
 

@@ -1,5 +1,8 @@
 package repository
 
+import "github.com/SilkovMax/go-musthave-metrics/internal/model"
+
+
 // Storage описывает интерфейс для работы с хранилищем метрик
 type Storage interface {
 	SetGauge(name string, value float64)
@@ -9,4 +12,6 @@ type Storage interface {
 	GetCounter(name string) (int64, error)
 	GetAllGauges() map[string]float64
 	GetAllCounters() map[string]int64
+
+	SetBatch(metrics []model.Metrics) error
 }
