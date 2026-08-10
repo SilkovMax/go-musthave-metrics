@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"log"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
@@ -62,25 +63,42 @@ func (s *MemStorage) backgroundSave() {
 }
 
 func (s *MemStorage) SetGauge(name string, value float64) {
-	s.mu.Lock()
+	metrics := func() []model.Metrics {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 
-	s.gauges[name] = value
-	s.mu.Unlock()
+		s.gauges[name] = value
 
-	// Синхронное сохранение, если интервал равен 0
-	if s.interval == 0 && s.filepath != "" {
-		s.SaveToFile()
+		if s.interval == 0 && s.filepath != "" {
+			return s.snapshotLocked()
+		}
+		return nil
+	}()
+
+	if metrics != nil {
+		if err := s.saveSnapshotToFile(metrics); err != nil {
+			log.Printf("MemStorage: ошибка сохранения: %v", err)
+		}
 	}
 }
 
 func (s *MemStorage) IncrementCounter(name string, delta int64) {
-	s.mu.Lock()
+	metrics := func() []model.Metrics {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 
-	s.counters[name] += delta
-	s.mu.Unlock()
+		s.counters[name] += delta
 
-	if s.interval == 0 && s.filepath != "" {
-		s.SaveToFile()
+		if s.interval == 0 && s.filepath != "" {
+			return s.snapshotLocked()
+		}
+		return nil
+	}()
+
+	if metrics != nil {
+		if err := s.saveSnapshotToFile(metrics); err != nil {
+			log.Printf("MemStorage: ошибка сохранения: %v", err)
+		}
 	}
 
 }
@@ -163,20 +181,15 @@ func (s *MemStorage) SaveToFile() error {
 	if s.filepath == "" {
 		return nil
 	}
-	metrics := s.GetAllMetrics()
-	data, err := json.Marshal(metrics)
-	if err != nil {
-		return err
-	}
 
-	file, err := os.Create(s.filepath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
+	metrics := func() []model.Metrics {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		return s.snapshotLocked()
+	}()
+	
 
-	_, err = file.Write(data)
-	return err
+	return s.saveSnapshotToFile(metrics)
 }
 
 func (s *MemStorage) LoadFromFile() error {
@@ -200,17 +213,60 @@ func (s *MemStorage) LoadFromFile() error {
 }
 
 func (s *MemStorage) SetBatch(metrics []model.Metrics) error {
-	for _, m := range metrics {
-		switch m.MType {
-		case "gauge":
-			if m.Value != nil {
-				s.SetGauge(m.ID, *m.Value)
-			}
-		case "counter":
-			if m.Delta != nil {
-				s.IncrementCounter(m.ID, *m.Delta)
+	snapshot := func() []model.Metrics {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		for _, m := range metrics {
+			switch m.MType {
+			case "gauge":
+				if m.Value != nil {
+					s.gauges[m.ID] = *m.Value
+				}
+			case "counter":
+				if m.Delta != nil {
+					s.counters[m.ID] += *m.Delta
+				}
 			}
 		}
+
+		if s.interval == 0 && s.filepath != "" {
+			return s.snapshotLocked()
+		}
+		return nil
+	}()
+
+	if snapshot != nil {
+		return s.saveSnapshotToFile(snapshot)
 	}
 	return nil
+}
+
+func (s *MemStorage) snapshotLocked() []model.Metrics {
+	var metrics []model.Metrics
+	for k, v := range s.gauges {
+		val := v
+		metrics = append(metrics, model.Metrics{ID: k, MType: model.Gauge, Value: &val})
+	}
+	for k, v := range s.counters {
+		val := v
+		metrics = append(metrics, model.Metrics{ID: k, MType: model.Counter, Delta: &val})
+	}
+	return metrics
+}
+
+func (s *MemStorage) saveSnapshotToFile(metrics []model.Metrics) error {
+	data, err := json.Marshal(metrics)
+	if err != nil {
+		return err
+	}
+
+	file, err := os.Create(s.filepath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = file.Write(data)
+	return err
 }
