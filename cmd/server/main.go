@@ -93,7 +93,6 @@ func main() {
 
 	var storage repository.Storage
 
-
 	if *databaseDSN != "" {
 		var err error
 		sqlDB, err = db.New(*databaseDSN)
@@ -113,16 +112,12 @@ func main() {
 		Log.Info("Используется файловое хранилище")
 	}
 
-
-
 	r := chi.NewRouter()
 
 	r.Use(middleware.GzipMiddleware)
 
 	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))
-
-
 
 	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
 		if sqlDB != nil {

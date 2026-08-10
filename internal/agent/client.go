@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 
@@ -25,42 +26,86 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
+func isRetriableHTTP(err error, resp *resty.Response) bool {
+	// Сетевая ошибка
+	if err != nil {
+		return true
+	}
+
+	// HTTP 5xx
+	if resp != nil && resp.StatusCode() >= 500 {
+		return true
+	}
+
+	return false
+}
+
 // SendGauge отправляет gauge-метрику на сервер
 func (c *Client) SendGauge(name string, value float64) error {
 	url := fmt.Sprintf("%s/update/gauge/%s/%s", c.baseURL, name, strconv.FormatFloat(value, 'f', -1, 64))
+	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
-	resp, err := c.client.R().
-		SetHeader("Content-Type", "text/plain").
-		Post(url)
+	for attempt := 0; attempt < 4; attempt++ {
+		resp, err := c.client.R().
+			SetHeader("Content-Type", "text/plain").
+			Post(url)
 
-	if err != nil {
-		return err
+		if err == nil && resp.StatusCode() == 200 {
+			return nil
+		}
+
+		if !isRetriableHTTP(err, resp) {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
+
+		if attempt < 3 {
+			time.Sleep(delays[attempt])
+		} else {
+			if err != nil {
+				return fmt.Errorf("все retry провалились: %w", err)
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
 	}
 
-	if resp.StatusCode() != 200 {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-	}
-
-	return nil
+	return fmt.Errorf("выход из цикла retry")
 }
 
 // SendCounter отправляет counter-метрику на сервер
 func (c *Client) SendCounter(name string, value int64) error {
 	url := fmt.Sprintf("%s/update/counter/%s/%s", c.baseURL, name, strconv.FormatInt(value, 10))
+	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
-	resp, err := c.client.R().
-		SetHeader("Content-Type", "text/plain").
-		Post(url)
+	for attempt := 0; attempt < 4; attempt++ {
+		resp, err := c.client.R().
+			SetHeader("Content-Type", "text/plain").
+			Post(url)
 
-	if err != nil {
-		return err
+		if err == nil && resp.StatusCode() == 200 {
+			return nil
+		}
+
+		if !isRetriableHTTP(err, resp) {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
+
+		if attempt < 3 {
+			time.Sleep(delays[attempt])
+		} else {
+			if err != nil {
+				return fmt.Errorf("все retry провалились: %w", err)
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
 	}
 
-	if resp.StatusCode() != 200 {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-	}
-
-	return nil
+	return fmt.Errorf("выход из цикла retry")
 }
 
 // SendMetrics отправляем в Json Формате с gzip
@@ -73,6 +118,7 @@ func (c *Client) SendMetric(m model.Metrics) error {
 
 	// Сжимаем JSON в буфер в памяти
 	var buf bytes.Buffer
+
 	gw := gzip.NewWriter(&buf)
 
 	if _, err := gw.Write(jsonData); err != nil {
@@ -83,22 +129,40 @@ func (c *Client) SendMetric(m model.Metrics) error {
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
-	resp, err := c.client.R().
-		SetHeader("Content-Type", "application/json").
-		SetHeader("Content-Encoding", "gzip").
-		SetHeader("Accept-Encoding", "gzip").
-		SetBody(&buf).
-		Post(c.baseURL + "/update")
+	compressedData := buf.Bytes()
 
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
+
+	for attempt := 0; attempt < 4; attempt++ {
+		resp, err := c.client.R().
+			SetHeader("Content-Type", "application/json").
+			SetHeader("Content-Encoding", "gzip").
+			SetHeader("Accept-Encoding", "gzip").
+			SetBody(bytes.NewReader(compressedData)).
+			Post(c.baseURL + "/update")
+
+		if err == nil && resp.StatusCode() == http.StatusOK {
+			return nil
+		}
+
+		if !isRetriableHTTP(err, resp) {
+			if err != nil {
+				return fmt.Errorf("failed to send request: %w", err)
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
+
+		if attempt < 3 {
+			time.Sleep(delays[attempt])
+		} else {
+			if err != nil {
+				return fmt.Errorf("failed to send request: %w", err)
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
 	}
 
-	if resp.StatusCode() != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-	}
-
-	return nil
+	return fmt.Errorf("выход из цикла retry")
 }
 
 func (c *Client) SendBatch(metrics []model.Metrics) error {
@@ -120,19 +184,38 @@ func (c *Client) SendBatch(metrics []model.Metrics) error {
 		return fmt.Errorf("failed to close gzip writer: %w", err)
 	}
 
-	resp, err := c.client.R().
-		SetHeader("Content-Type", "application/json").
-		SetHeader("Content-Encoding", "gzip").
-		SetBody(&buf).
-		Post(c.baseURL + "/updates/")
+	compressedData := buf.Bytes()
 
-	if err != nil {
-		return fmt.Errorf("failed to send batch: %w", err)
+	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
+
+	for attempt := 0; attempt < 4; attempt++ {
+		resp, err := c.client.R().
+			SetHeader("Content-Type", "application/json").
+			SetHeader("Content-Encoding", "gzip").
+			SetBody(bytes.NewReader(compressedData)).
+			Post(c.baseURL + "/updates/")
+
+		if err == nil && resp.StatusCode() == http.StatusOK {
+			return nil
+		}
+
+		if !isRetriableHTTP(err, resp) {
+			if err != nil {
+				return fmt.Errorf("failed to send batch: %w", err)
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
+
+		if attempt < 3 {
+			fmt.Printf("SendBatch: retry %d/3 (status: %d)\n", attempt+1, resp.StatusCode())
+			time.Sleep(delays[attempt])
+		} else {
+			if err != nil {
+				return fmt.Errorf("failed to send batch: %w", err)
+			}
+			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+		}
 	}
 
-	if resp.StatusCode() != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-	}
-
-	return nil
+	return fmt.Errorf("выход из цикла retry")
 }

@@ -81,7 +81,6 @@ func main() {
 		case <-reportTicker.C:
 			fmt.Println("Отправка метрик на сервер (batch)")
 
-
 			var batch []model.Metrics
 
 			for name, value := range col.GetGauges() {
@@ -107,8 +106,8 @@ func main() {
 			} else {
 				fmt.Printf("Отправлено метрик: %d\n", len(batch))
 			}
-			}
-
-			fmt.Println("Метрики отправлены")
 		}
+
+		fmt.Println("Метрики отправлены")
 	}
+}

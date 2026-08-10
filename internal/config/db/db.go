@@ -9,9 +9,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-
 )
-
 
 func New(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", dsn)
@@ -29,7 +27,6 @@ func New(dsn string) (*sql.DB, error) {
 
 	return db, nil
 }
-
 
 func runMigrations(db *sql.DB) error {
 

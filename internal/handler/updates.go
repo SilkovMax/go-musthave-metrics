@@ -16,14 +16,12 @@ func NewUpdatesHandler(storage repository.Storage) *UpdatesHandler {
 	return &UpdatesHandler{storage: storage}
 }
 
-
 func (h *UpdatesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "only POST method allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
 
 	var metrics []model.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
