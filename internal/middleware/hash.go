@@ -33,7 +33,7 @@ func HashRequestMiddleware(key string) func(http.Handler) http.Handler {
 
 			requestHash := r.Header.Get("HashSHA256")
 			if requestHash == "" {
-				http.Error(w, "missing HashSHA256 header", http.StatusBadRequest)
+				next.ServeHTTP(w, r)
 				return
 			}
 
@@ -61,6 +61,8 @@ func HashResponseMiddleware(key string) func(http.Handler) http.Handler {
 			crw := &capturingResponseWriter{
 				ResponseWriter: w,
 				body:           &bytes.Buffer{},
+				statusCode:     200,
+				headerWritten:  false,
 			}
 
 			next.ServeHTTP(crw, r)
@@ -68,6 +70,10 @@ func HashResponseMiddleware(key string) func(http.Handler) http.Handler {
 			hash := computeHMAC(crw.body.Bytes(), key)
 
 			w.Header().Set("HashSHA256", hash)
+
+			if !crw.headerWritten {
+				w.WriteHeader(crw.statusCode)
+			}
 
 			w.Write(crw.body.Bytes())
 		})
@@ -85,6 +91,7 @@ type capturingResponseWriter struct {
 	http.ResponseWriter
 	body       *bytes.Buffer
 	statusCode int
+	headerWritten bool
 }
 
 func (crw *capturingResponseWriter) Write(b []byte) (int, error) {
@@ -93,5 +100,5 @@ func (crw *capturingResponseWriter) Write(b []byte) (int, error) {
 
 func (crw *capturingResponseWriter) WriteHeader(statusCode int) {
 	crw.statusCode = statusCode
-	crw.ResponseWriter.WriteHeader(statusCode)
+	crw.headerWritten = true
 }
