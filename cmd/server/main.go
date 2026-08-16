@@ -52,6 +52,8 @@ func main() {
 
 	databaseDSN := flag.String("d", "", "connect to DB")
 
+	hashKey := flag.String("k", "", "HMAC key for signing requests")
+
 	flag.Parse()
 
 	// add Env and check if ""
@@ -87,6 +89,10 @@ func main() {
 		*databaseDSN = envDSN
 	}
 
+	if envKey := os.Getenv("KEY"); envKey != "" {
+		*hashKey = envKey
+	}
+
 	defer Log.Sync()
 
 	var sqlDB *sql.DB
@@ -115,6 +121,8 @@ func main() {
 	r := chi.NewRouter()
 
 	r.Use(middleware.GzipMiddleware)
+	r.Use(middleware.HashRequestMiddleware(*hashKey))
+	r.Use(middleware.HashResponseMiddleware(*hashKey))
 
 	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))

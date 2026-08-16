@@ -3,10 +3,10 @@ package repository
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"sync"
 	"time"
-	"log"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
@@ -187,7 +187,6 @@ func (s *MemStorage) SaveToFile() error {
 		defer s.mu.RUnlock()
 		return s.snapshotLocked()
 	}()
-	
 
 	return s.saveSnapshotToFile(metrics)
 }

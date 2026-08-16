@@ -25,7 +25,7 @@ func (s *DBStorage) Ping() error {
 	return s.db.Ping()
 }
 
-//Ошибки
+// Ошибки
 func isRetriable(err error) bool {
 	if err == nil {
 		return false
@@ -47,7 +47,7 @@ func isRetriable(err error) bool {
 	return false
 }
 
-//Запись
+// Запись
 func (s *DBStorage) SetGauge(name string, value float64) {
 	query := `INSERT INTO gauges (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`
@@ -56,7 +56,7 @@ func (s *DBStorage) SetGauge(name string, value float64) {
 	for attempt := 0; attempt < 4; attempt++ {
 		_, err := s.db.Exec(query, name, value)
 		if err == nil {
-			return 
+			return
 		}
 
 		if !isRetriable(err) {
@@ -98,7 +98,7 @@ func (s *DBStorage) IncrementCounter(name string, delta int64) {
 	}
 }
 
-//Чтение
+// Чтение
 func (s *DBStorage) GetGauge(name string) (float64, error) {
 	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 

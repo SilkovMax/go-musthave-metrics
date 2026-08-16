@@ -3,6 +3,9 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,13 +20,23 @@ import (
 type Client struct {
 	baseURL string
 	client  *resty.Client
+	key     string
 }
 
-func NewClient(baseURL string) *Client {
+// Создаем Http клиент с параметрами
+func NewClient(baseURL string, key string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		client:  resty.New(),
+		key:     key,
 	}
+}
+
+// Вычисляем Sha и выдаем hex
+func (c *Client) computeHMAC(data []byte) string {
+	mac := hmac.New(sha256.New, []byte(c.key))
+	mac.Write(data)
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func isRetriableHTTP(err error, resp *resty.Response) bool {
@@ -46,9 +59,15 @@ func (c *Client) SendGauge(name string, value float64) error {
 	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
 	for attempt := 0; attempt < 4; attempt++ {
-		resp, err := c.client.R().
-			SetHeader("Content-Type", "text/plain").
-			Post(url)
+
+		req := c.client.R().SetHeader("Content-Type", "text/plain")
+
+		if c.key != "" {
+			hash := c.computeHMAC([]byte{}) // пустое тело для GET запросов
+			req.SetHeader("HashSHA256", hash)
+		}
+
+		resp, err := req.Post(url)
 
 		if err == nil && resp.StatusCode() == 200 {
 			return nil
@@ -80,9 +99,16 @@ func (c *Client) SendCounter(name string, value int64) error {
 	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
 	for attempt := 0; attempt < 4; attempt++ {
-		resp, err := c.client.R().
-			SetHeader("Content-Type", "text/plain").
-			Post(url)
+
+		req := c.client.R().SetHeader("Content-Type", "text/plain")
+
+		if c.key != "" {
+			hash := c.computeHMAC([]byte{})
+			req.SetHeader("HashSHA256", hash)
+		}
+
+		// Отправляем запрос
+		resp, err := req.Post(url)
 
 		if err == nil && resp.StatusCode() == 200 {
 			return nil
@@ -134,12 +160,19 @@ func (c *Client) SendMetric(m model.Metrics) error {
 	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
 	for attempt := 0; attempt < 4; attempt++ {
-		resp, err := c.client.R().
+		req := c.client.R().
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
 			SetHeader("Accept-Encoding", "gzip").
-			SetBody(bytes.NewReader(compressedData)).
-			Post(c.baseURL + "/update")
+			SetBody(bytes.NewReader(compressedData))
+
+		if c.key != "" {
+			hash := c.computeHMAC(jsonData)
+			req.SetHeader("HashSHA256", hash)
+		}
+
+		// Отправляем запрос
+		resp, err := req.Post(c.baseURL + "/update")
 
 		if err == nil && resp.StatusCode() == http.StatusOK {
 			return nil
@@ -189,11 +222,17 @@ func (c *Client) SendBatch(metrics []model.Metrics) error {
 	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
 	for attempt := 0; attempt < 4; attempt++ {
-		resp, err := c.client.R().
+		req := c.client.R().
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
-			SetBody(bytes.NewReader(compressedData)).
-			Post(c.baseURL + "/updates/")
+			SetBody(bytes.NewReader(compressedData))
+
+		if c.key != "" {
+			hash := c.computeHMAC(jsonData)
+			req.SetHeader("HashSHA256", hash)
+		}
+
+		resp, err := req.Post(c.baseURL + "/updates/")
 
 		if err == nil && resp.StatusCode() == http.StatusOK {
 			return nil
