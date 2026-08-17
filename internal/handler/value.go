@@ -67,13 +67,15 @@ func NewValueJSONHandler(storage repository.Storage) *ValueJSONHandler {
 
 func (h *ValueJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Type") != "application/json" {
-		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnsupportedMediaType)
 		return
 	}
 
 	var req model.Metrics
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -86,19 +88,22 @@ func (h *ValueJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case model.Gauge:
 		val, err := h.storage.GetGauge(req.ID)
 		if err != nil {
-			http.Error(w, "metric not found", http.StatusNotFound)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		resp.Value = &val
 	case model.Counter:
 		val, err := h.storage.GetCounter(req.ID)
 		if err != nil {
-			http.Error(w, "metric not found", http.StatusNotFound)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		resp.Delta = &val
 	default:
-		http.Error(w, "bad request", http.StatusBadRequest)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
