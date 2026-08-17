@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+
 	"strconv"
 	"time"
 
@@ -17,6 +18,7 @@ func main() {
 	address := flag.String("a", "localhost:8080", "address and port to run server")
 	reportInterval := flag.Int("r", 10, "report interval in seconds")
 	pollInterval := flag.Int("p", 2, "poll interval in seconds")
+	key := flag.String("k", "", "HMAC key for requests")
 
 	flag.Parse()
 
@@ -49,6 +51,10 @@ func main() {
 
 	}
 
+	if envKey := os.Getenv("KEY"); envKey != "" {
+		*key = envKey
+	}
+
 	// Валидация интервалов
 	if *reportInterval <= 0 || *pollInterval <= 0 {
 		fmt.Println("Интервалы должны быть больше нуля")
@@ -58,7 +64,7 @@ func main() {
 	col := agent.NewCollector()
 
 	serverURL := fmt.Sprintf("http://%s", *address)
-	client := agent.NewClient(serverURL)
+	client := agent.NewClient(serverURL, *key)
 
 	pollDuration := time.Duration(*pollInterval) * time.Second
 	reportDuration := time.Duration(*reportInterval) * time.Second
@@ -79,32 +85,35 @@ func main() {
 			fmt.Println("Метрики обновлены")
 
 		case <-reportTicker.C:
-			fmt.Println("Отправка метрик на сервер")
+			fmt.Println("Отправка метрик на сервер (batch)")
+
+			var batch []model.Metrics
 
 			for name, value := range col.GetGauges() {
-				m := model.Metrics{
+				v := value
+				batch = append(batch, model.Metrics{
 					ID:    name,
 					MType: model.Gauge,
-					Value: &value,
-				}
-				if err := client.SendMetric(m); err != nil {
-					fmt.Printf("Ошибка отправки gauge %s: %v\n", name, err)
-				}
+					Value: &v,
+				})
 			}
 
 			for name, value := range col.GetCounters() {
-				m := model.Metrics{
+				v := value
+				batch = append(batch, model.Metrics{
 					ID:    name,
 					MType: model.Counter,
-					Delta: &value,
-				}
-				if err := client.SendMetric(m); err != nil {
-					fmt.Printf("Ошибка отправки counter %s: %v\n", name, err)
-				}
+					Delta: &v,
+				})
 			}
 
-			fmt.Println("Метрики отправлены")
+			if err := client.SendBatch(batch); err != nil {
+				fmt.Printf("Ошибка batch-отправки: %v\n", err)
+			} else {
+				fmt.Printf("Отправлено метрик: %d\n", len(batch))
+			}
 		}
-	}
 
+		fmt.Println("Метрики отправлены")
+	}
 }

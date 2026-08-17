@@ -60,7 +60,7 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("{}")) //Для автотестов
 
@@ -99,6 +99,7 @@ func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("{}"))
 }
