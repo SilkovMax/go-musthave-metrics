@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-
 )
 
 // Проверяем HMAC-SHA256 подпись входящего запроса POST
@@ -63,7 +62,6 @@ func HashResponseMiddleware(key string) func(http.Handler) http.Handler {
 				ResponseWriter: w,
 				body:           &bytes.Buffer{},
 				statusCode:     200,
-
 			}
 
 			next.ServeHTTP(crw, r)
@@ -90,7 +88,6 @@ type capturingResponseWriter struct {
 	http.ResponseWriter
 	body       *bytes.Buffer
 	statusCode int
-
 }
 
 func (crw *capturingResponseWriter) Write(b []byte) (int, error) {
