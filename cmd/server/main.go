@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
@@ -48,6 +50,10 @@ func main() {
 	fileStoragePath := flag.String("f", "metrics.json", "file storage path")
 	restore := flag.Bool("r", false, "reatore metrics from file on start app")
 
+	databaseDSN := flag.String("d", "", "connect to DB")
+
+	hashKey := flag.String("k", "", "HMAC key for signing requests")
+
 	flag.Parse()
 
 	// add Env and check if ""
@@ -79,22 +85,63 @@ func main() {
 		}
 	}
 
+	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
+		*databaseDSN = envDSN
+	}
+
+	if envKey := os.Getenv("KEY"); envKey != "" {
+		*hashKey = envKey
+	}
+
 	defer Log.Sync()
 
-	intervalDuration := time.Duration(*storeInterval) * time.Second
-	storage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
+	var sqlDB *sql.DB
 
-	defer storage.Stop()
+	var storage repository.Storage
+
+	if *databaseDSN != "" {
+		var err error
+		sqlDB, err = db.New(*databaseDSN)
+		if err != nil {
+			Log.Fatal("Ошибка подключения к базе данных", zap.Error(err))
+		}
+		defer sqlDB.Close()
+		storage = repository.NewDBStorage(sqlDB)
+		Log.Info("Успешно подключено к PostgreSQL")
+	} else {
+
+		intervalDuration := time.Duration(*storeInterval) * time.Second
+		memStorage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
+
+		storage = memStorage
+		defer memStorage.Stop()
+		Log.Info("Используется файловое хранилище")
+	}
 
 	r := chi.NewRouter()
 
 	r.Use(middleware.GzipMiddleware)
+	r.Use(middleware.HashRequestMiddleware(*hashKey))
+	r.Use(middleware.HashResponseMiddleware(*hashKey))
 
 	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))
 
+	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
+		if sqlDB != nil {
+			if err := sqlDB.Ping(); err != nil {
+				http.Error(w, "database ping failed", http.StatusInternalServerError)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
 	r.Post("/update", handler.NewUpdateJSONHandler(storage).ServeHTTP)
 	r.Post("/update/", handler.NewUpdateJSONHandler(storage).ServeHTTP) //для автотеста
+
+	r.Post("/updates", handler.NewUpdatesHandler(storage).ServeHTTP)
+	r.Post("/updates/", handler.NewUpdatesHandler(storage).ServeHTTP)
 
 	r.Post("/value", handler.NewValueJSONHandler(storage).ServeHTTP)
 	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP) //для автотеста
