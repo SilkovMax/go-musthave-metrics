@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -53,53 +54,44 @@ func isRetriableHTTP(err error, resp *resty.Response) bool {
 	return false
 }
 
-// SendGauge отправляет gauge-метрику на сервер
-func (c *Client) SendGauge(name string, value float64) error {
-	url := fmt.Sprintf("%s/update/gauge/%s/%s", c.baseURL, name, strconv.FormatFloat(value, 'f', -1, 64))
+// withRetryHTTP выполняет retry для временных ошибок.
+// Попыток всего 4 (1+3) / Интервалы: 1s,3s,5s
+func withRetryHTTP(operationName string, fn func() (*resty.Response, error)) error {
 	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
 
 	for attempt := 0; attempt < 4; attempt++ {
+		resp, err := fn()
 
-		req := c.client.R().SetHeader("Content-Type", "text/plain")
-
-		if c.key != "" {
-			hash := c.computeHMAC([]byte{}) // пустое тело для GET запросов
-			req.SetHeader("HashSHA256", hash)
-		}
-
-		resp, err := req.Post(url)
-
-		if err == nil && resp.StatusCode() == 200 {
-			return nil
+		if err == nil && resp.StatusCode() == http.StatusOK {
+			return nil // Успех
 		}
 
 		if !isRetriableHTTP(err, resp) {
 			if err != nil {
-				return err
+				return fmt.Errorf("%s: %w", operationName, err)
 			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+			return fmt.Errorf("%s: unexpected status code: %d", operationName, resp.StatusCode())
 		}
 
 		if attempt < 3 {
+			log.Printf("Client.%s: retry %d/3", operationName, attempt+1)
 			time.Sleep(delays[attempt])
 		} else {
 			if err != nil {
-				return fmt.Errorf("все retry провалились: %w", err)
+				return fmt.Errorf("%s: все retry провалились: %w", operationName, err)
 			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
+			return fmt.Errorf("%s: unexpected status code: %d после всех retry", operationName, resp.StatusCode())
 		}
 	}
 
-	return fmt.Errorf("выход из цикла retry")
+	return fmt.Errorf("выход из цикла retry для %s", operationName)
 }
 
-// SendCounter отправляет counter-метрику на сервер
-func (c *Client) SendCounter(name string, value int64) error {
-	url := fmt.Sprintf("%s/update/counter/%s/%s", c.baseURL, name, strconv.FormatInt(value, 10))
-	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
+// SendGauge отправляет gauge-метрику на сервер
+func (c *Client) SendGauge(name string, value float64) error {
+	url := fmt.Sprintf("%s/update/gauge/%s/%s", c.baseURL, name, strconv.FormatFloat(value, 'f', -1, 64))
 
-	for attempt := 0; attempt < 4; attempt++ {
-
+	return withRetryHTTP("SendGauge", func() (*resty.Response, error) {
 		req := c.client.R().SetHeader("Content-Type", "text/plain")
 
 		if c.key != "" {
@@ -107,31 +99,24 @@ func (c *Client) SendCounter(name string, value int64) error {
 			req.SetHeader("HashSHA256", hash)
 		}
 
-		// Отправляем запрос
-		resp, err := req.Post(url)
+		return req.Post(url)
+	})
+}
 
-		if err == nil && resp.StatusCode() == 200 {
-			return nil
+// SendCounter отправляет counter-метрику на сервер
+func (c *Client) SendCounter(name string, value int64) error {
+	url := fmt.Sprintf("%s/update/counter/%s/%s", c.baseURL, name, strconv.FormatInt(value, 10))
+
+	return withRetryHTTP("SendCounter", func() (*resty.Response, error) {
+		req := c.client.R().SetHeader("Content-Type", "text/plain")
+
+		if c.key != "" {
+			hash := c.computeHMAC([]byte{})
+			req.SetHeader("HashSHA256", hash)
 		}
 
-		if !isRetriableHTTP(err, resp) {
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-		}
-
-		if attempt < 3 {
-			time.Sleep(delays[attempt])
-		} else {
-			if err != nil {
-				return fmt.Errorf("все retry провалились: %w", err)
-			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-		}
-	}
-
-	return fmt.Errorf("выход из цикла retry")
+		return req.Post(url)
+	})
 }
 
 // SendMetrics отправляем в Json Формате с gzip
@@ -157,9 +142,7 @@ func (c *Client) SendMetric(m model.Metrics) error {
 
 	compressedData := buf.Bytes()
 
-	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
-
-	for attempt := 0; attempt < 4; attempt++ {
+	return withRetryHTTP("SendMetric", func() (*resty.Response, error) {
 		req := c.client.R().
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
@@ -171,31 +154,8 @@ func (c *Client) SendMetric(m model.Metrics) error {
 			req.SetHeader("HashSHA256", hash)
 		}
 
-		// Отправляем запрос
-		resp, err := req.Post(c.baseURL + "/update")
-
-		if err == nil && resp.StatusCode() == http.StatusOK {
-			return nil
-		}
-
-		if !isRetriableHTTP(err, resp) {
-			if err != nil {
-				return fmt.Errorf("failed to send request: %w", err)
-			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-		}
-
-		if attempt < 3 {
-			time.Sleep(delays[attempt])
-		} else {
-			if err != nil {
-				return fmt.Errorf("failed to send request: %w", err)
-			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-		}
-	}
-
-	return fmt.Errorf("выход из цикла retry")
+		return req.Post(c.baseURL + "/update")
+	})
 }
 
 func (c *Client) SendBatch(metrics []model.Metrics) error {
@@ -219,9 +179,7 @@ func (c *Client) SendBatch(metrics []model.Metrics) error {
 
 	compressedData := buf.Bytes()
 
-	delays := []time.Duration{time.Second, 3 * time.Second, 5 * time.Second}
-
-	for attempt := 0; attempt < 4; attempt++ {
+	return withRetryHTTP("SendBatch", func() (*resty.Response, error) {
 		req := c.client.R().
 			SetHeader("Content-Type", "application/json").
 			SetHeader("Content-Encoding", "gzip").
@@ -232,29 +190,6 @@ func (c *Client) SendBatch(metrics []model.Metrics) error {
 			req.SetHeader("HashSHA256", hash)
 		}
 
-		resp, err := req.Post(c.baseURL + "/updates/")
-
-		if err == nil && resp.StatusCode() == http.StatusOK {
-			return nil
-		}
-
-		if !isRetriableHTTP(err, resp) {
-			if err != nil {
-				return fmt.Errorf("failed to send batch: %w", err)
-			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-		}
-
-		if attempt < 3 {
-			fmt.Printf("SendBatch: retry %d/3 (status: %d)\n", attempt+1, resp.StatusCode())
-			time.Sleep(delays[attempt])
-		} else {
-			if err != nil {
-				return fmt.Errorf("failed to send batch: %w", err)
-			}
-			return fmt.Errorf("unexpected status code: %d", resp.StatusCode())
-		}
-	}
-
-	return fmt.Errorf("выход из цикла retry")
+		return req.Post(c.baseURL + "/updates/")
+	})
 }

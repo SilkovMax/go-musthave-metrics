@@ -32,8 +32,9 @@ func HashRequestMiddleware(key string) func(http.Handler) http.Handler {
 			r.Body = io.NopCloser(bytes.NewReader(body))
 
 			requestHash := r.Header.Get("HashSHA256")
+
 			if requestHash == "" {
-				next.ServeHTTP(w, r)
+				http.Error(w, "missing HashSHA256 header", http.StatusBadRequest)
 				return
 			}
 
