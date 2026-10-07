@@ -1,1 +1,0 @@
-[{"id":"TestGauge","type":"gauge","value":42.5},{"id":"SyncMetric","type":"gauge","value":99.9},{"id":"TestCounter","type":"counter","delta":200}]

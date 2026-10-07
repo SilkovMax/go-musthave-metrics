@@ -13,7 +13,7 @@ import (
 // helper создаёт chi-роутер с зарегистрированным UpdateHandler
 func setupUpdateRouter(storage repository.Storage) *chi.Mux {
 	r := chi.NewRouter()
-	r.Post("/update/{type}/{name}/{value}", NewUpdateHandler(storage).ServeHTTP)
+	r.Post("/update/{type}/{name}/{value}", NewUpdateHandler(storage, nil).ServeHTTP)
 	return r
 }
 

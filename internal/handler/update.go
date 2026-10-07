@@ -2,21 +2,27 @@ package handler
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
 type UpdateHandler struct {
-	storage repository.Storage
+	storage      repository.Storage
+	auditManager *audit.Manager
 }
 
-func NewUpdateHandler(storage repository.Storage) *UpdateHandler {
-	return &UpdateHandler{storage: storage}
+func NewUpdateHandler(storage repository.Storage, auditManager *audit.Manager) *UpdateHandler {
+	return &UpdateHandler{
+		storage:      storage,
+		auditManager: auditManager,
+	}
 }
 
 func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -60,18 +66,29 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if h.auditManager != nil {
+		metrics := []string{metricName}
+		ipAddress := extractIPAddress(r)
+		event := audit.NewAuditEvent(metrics, ipAddress)
+		h.auditManager.Notify(event)
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("{}")) //Для автотестов
 
 }
 
 type UpdateJSONHandler struct {
-	storage repository.Storage
+	storage      repository.Storage
+	auditManager *audit.Manager
 }
 
-func NewUpdateJSONHandler(storage repository.Storage) *UpdateJSONHandler {
-	return &UpdateJSONHandler{storage: storage}
+func NewUpdateJSONHandler(storage repository.Storage, auditManager *audit.Manager) *UpdateJSONHandler {
+	return &UpdateJSONHandler{
+		storage:      storage,
+		auditManager: auditManager,
+	}
 }
 
 func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -100,5 +117,32 @@ func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.auditManager != nil {
+		metrics := []string{m.ID}
+		ipAddress := extractIPAddress(r)
+		event := audit.NewAuditEvent(metrics, ipAddress)
+		h.auditManager.Notify(event)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("{}"))
+}
+
+// extractIPAddress извлекает IP-адрес из запроса.
+func extractIPAddress(r *http.Request) string {
+	// Пробуем получить из заголовка X-Real-IP или X-Forwarded-For (если есть прокси)
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return ip
+	}
+
+	// Иначе берём из RemoteAddr (IP:Port)
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
