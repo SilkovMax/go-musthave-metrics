@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
@@ -49,6 +50,8 @@ func main() {
 	storeInterval := flag.Int("i", 300, "store interval in seconds")
 	fileStoragePath := flag.String("f", "metrics.json", "file storage path")
 	restore := flag.Bool("r", false, "reatore metrics from file on start app")
+	auditFile := flag.String("audit-file", "", "path to audit log file")
+	auditURL := flag.String("audit-url", "", "URL to send audit events")
 
 	databaseDSN := flag.String("d", "", "connect to DB")
 
@@ -93,6 +96,14 @@ func main() {
 		*hashKey = envKey
 	}
 
+	if envAuditFile := os.Getenv("AUDIT_FILE"); envAuditFile != "" {
+		*auditFile = envAuditFile
+	}
+
+	if envAuditURL := os.Getenv("AUDIT_URL"); envAuditURL != "" {
+		*auditURL = envAuditURL
+	}
+
 	defer Log.Sync()
 
 	var sqlDB *sql.DB
@@ -118,6 +129,34 @@ func main() {
 		Log.Info("Используется файловое хранилище")
 	}
 
+	// СОЗДАНИЕ AUDIT MANAGER!
+	var auditManager *audit.Manager
+
+	if *auditFile != "" || *auditURL != "" {
+		auditManager = audit.NewManager()
+
+		// Добавляем FileObserver если указан файл
+		if *auditFile != "" {
+			fileObserver, err := audit.NewFileObserver(*auditFile)
+			if err != nil {
+				Log.Error("Ошибка создания FileObserver", zap.Error(err))
+			} else {
+				auditManager.AddObserver(fileObserver)
+				Log.Info("FileObserver добавлен", zap.String("file", *auditFile))
+			}
+		}
+
+		// Добавляем HTTPObserver если указан URL
+		if *auditURL != "" {
+			httpObserver := audit.NewHTTPObserver(*auditURL)
+			auditManager.AddObserver(httpObserver)
+			Log.Info("HTTPObserver добавлен", zap.String("url", *auditURL))
+		}
+
+		// Откладываем остановку менеджера
+		defer auditManager.Stop()
+	}
+
 	r := chi.NewRouter()
 
 	r.Use(middleware.GzipMiddleware)
@@ -137,16 +176,16 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	r.Post("/update", handler.NewUpdateJSONHandler(storage).ServeHTTP)
-	r.Post("/update/", handler.NewUpdateJSONHandler(storage).ServeHTTP) //для автотеста
+	r.Post("/update", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP)
+	r.Post("/update/", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP) //для автотеста
 
-	r.Post("/updates", handler.NewUpdatesHandler(storage).ServeHTTP)
-	r.Post("/updates/", handler.NewUpdatesHandler(storage).ServeHTTP)
+	r.Post("/updates", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
+	r.Post("/updates/", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
 
 	r.Post("/value", handler.NewValueJSONHandler(storage).ServeHTTP)
 	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP) //для автотеста
 
-	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage).ServeHTTP)
+	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage, auditManager).ServeHTTP)
 
 	r.Get("/value/{type}/{name}", handler.NewValueHandler(storage).ServeHTTP)
 
