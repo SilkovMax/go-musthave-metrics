@@ -17,7 +17,7 @@ type FileObserver struct {
 func NewFileObserver(filePath string) (*FileObserver, error) {
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("Ошибка открытия файла аудита: %w", err)
+		return nil, fmt.Errorf("ошибка открытия файла аудита: %w", err)
 	}
 	file.Close()
 
@@ -33,17 +33,17 @@ func (o *FileObserver) Send(event AuditEvent) error {
 
 	file, err := os.OpenFile(o.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		return fmt.Errorf("Ошибка открытия файла аудита: %w", err)
+		return fmt.Errorf("ошибка открытия файла аудита: %w", err)
 	}
 	defer file.Close()
 
 	data, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("Ошибка сериализации события аудита: %w", err)
+		return fmt.Errorf("ошибка сериализации события аудита: %w", err)
 	}
 
 	if _, err := file.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("Ошибка записи события аудита: %w", err)
+		return fmt.Errorf("ошибка записи события аудита: %w", err)
 	}
 
 	return nil
