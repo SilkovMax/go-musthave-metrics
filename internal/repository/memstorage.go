@@ -12,9 +12,11 @@ import (
 )
 
 type MemStorage struct {
-	mu       sync.RWMutex
-	gauges   map[string]float64
-	counters map[string]int64
+	mu         sync.RWMutex
+	gauges     map[string]float64
+	counters   map[string]int64
+	gaugeBuf   []float64
+	counterBuf []int64
 
 	filepath string
 	interval time.Duration
@@ -242,14 +244,41 @@ func (s *MemStorage) SetBatch(metrics []model.Metrics) error {
 }
 
 func (s *MemStorage) snapshotLocked() []model.Metrics {
-	var metrics []model.Metrics
-	for k, v := range s.gauges {
-		val := v
-		metrics = append(metrics, model.Metrics{ID: k, MType: model.Gauge, Value: &val})
+	// ОПТИМИЗАЦИЯ 1: preallocate slice с нужной ёмкостью
+	// Это убирает реаллокации при append
+	totalLen := len(s.gauges) + len(s.counters)
+	metrics := make([]model.Metrics, 0, totalLen)
+
+	// ОПТИМИЗАЦИЯ 2: переиспользуем буфер значений
+	// Вместо создания новой переменной val := v на каждой итерации,
+	// используем один буфер для всех значений
+	if cap(s.gaugeBuf) < len(s.gauges) {
+		s.gaugeBuf = make([]float64, len(s.gauges))
 	}
+	if cap(s.counterBuf) < len(s.counters) {
+		s.counterBuf = make([]int64, len(s.counters))
+	}
+
+	i := 0
+	for k, v := range s.gauges {
+		s.gaugeBuf[i] = v
+		metrics = append(metrics, model.Metrics{
+			ID:    k,
+			MType: model.Gauge,
+			Value: &s.gaugeBuf[i],
+		})
+		i++
+	}
+
+	j := 0
 	for k, v := range s.counters {
-		val := v
-		metrics = append(metrics, model.Metrics{ID: k, MType: model.Counter, Delta: &val})
+		s.counterBuf[j] = v
+		metrics = append(metrics, model.Metrics{
+			ID:    k,
+			MType: model.Counter,
+			Delta: &s.counterBuf[j],
+		})
+		j++
 	}
 	return metrics
 }

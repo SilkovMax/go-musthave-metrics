@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strconv"
 	"time"
@@ -192,6 +194,11 @@ func main() {
 	r.Get("/", handler.NewIndexHandler(storage).ServeHTTP)
 
 	Log.Info("Сервер запущен", zap.String("address", *address))
+
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil)) // pprof endpoint
+	}()
+
 	err := http.ListenAndServe(*address, r)
 	if err != nil {
 		Log.Fatal("Ошибка запуска сервера", zap.Error(err))
