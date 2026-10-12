@@ -1,11 +1,18 @@
 package agent
 
 import (
+	"fmt"
+	"log"
 	"math/rand"
 	"runtime"
+	"sync"
+
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 type Collector struct {
+	mu       sync.RWMutex
 	gauges   map[string]float64
 	counters map[string]int64
 }
@@ -20,6 +27,9 @@ func NewCollector() *Collector {
 func (c *Collector) Update() {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// Базовые метрики
 	c.gauges["Alloc"] = float64(memStats.Alloc)
@@ -55,10 +65,50 @@ func (c *Collector) Update() {
 	c.gauges["RandomValue"] = rand.Float64()
 }
 
+// UpdateGopsutil сбор метрик через gopsutil
+func (c *Collector) UpdateGopsutil() {
+	v, err := mem.VirtualMemory()
+	if err != nil {
+		log.Printf("Collector: ошибка получения памяти: %v", err)
+		return
+	}
+
+	percents, err := cpu.Percent(0, true)
+	if err != nil {
+		log.Printf("Collector: ошибка получения CPU: %v", err)
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.gauges["TotalMemory"] = float64(v.Total)
+	c.gauges["FreeMemory"] = float64(v.Free)
+
+	for i, percent := range percents {
+		key := fmt.Sprintf("CPUutilization%d", i+1)
+		c.gauges[key] = percent
+	}
+}
+
 func (c *Collector) GetGauges() map[string]float64 {
-	return c.gauges
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make(map[string]float64, len(c.gauges))
+	for k, v := range c.gauges {
+		result[k] = v
+	}
+	return result
 }
 
 func (c *Collector) GetCounters() map[string]int64 {
-	return c.counters
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make(map[string]int64, len(c.counters))
+	for k, v := range c.counters {
+		result[k] = v
+	}
+	return result
 }
