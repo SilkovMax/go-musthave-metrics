@@ -11,6 +11,13 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
 
+// MemStorage реализует Storage в памяти с опциональным сохранением в файл.
+// Потокобезопасен через sync.RWMutex.
+//
+// Параметры:
+//   - filepath: путь к файлу для персистентности (пустая строка отключает сохранение)
+//   - interval: интервал периодического сохранения (0 = синхронное сохранение при каждом update)
+//   - restore: загружать ли метрики из файла при старте
 type MemStorage struct {
 	mu         sync.RWMutex
 	gauges     map[string]float64
@@ -23,6 +30,11 @@ type MemStorage struct {
 	stopCh   chan struct{}
 }
 
+// NewMemStorage создаёт новое in-memory хранилище.
+//
+// Если restore=true и filepath не пустой, загружает метрики из файла при старте.
+// Если interval>0 и filepath не пустой, запускает фоновую горутину для периодического сохранения.
+// Если interval=0, сохраняет метрики в файл синхронно при каждом update (для тестирования).
 func NewMemStorage(filepath string, interval time.Duration, restore bool) *MemStorage {
 	s := &MemStorage{
 		gauges:   make(map[string]float64),
@@ -43,11 +55,13 @@ func NewMemStorage(filepath string, interval time.Duration, restore bool) *MemSt
 	return s
 }
 
+// Stop останавливает фоновую горутину сохранения (если она запущена).
+// Должен вызываться при завершении работы с хранилищем.
 func (s *MemStorage) Stop() {
 	close(s.stopCh)
-
 }
 
+// backgroundSave периодически сохраняет метрики в файл.
 func (s *MemStorage) backgroundSave() {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -58,12 +72,12 @@ func (s *MemStorage) backgroundSave() {
 			s.SaveToFile()
 		case <-s.stopCh:
 			return
-
 		}
-
 	}
 }
 
+// SetGauge сохраняет значение gauge метрики.
+// Если interval=0 и filepath задан, синхронно сохраняет все метрики в файл.
 func (s *MemStorage) SetGauge(name string, value float64) {
 	metrics := func() []model.Metrics {
 		s.mu.Lock()
@@ -84,6 +98,8 @@ func (s *MemStorage) SetGauge(name string, value float64) {
 	}
 }
 
+// IncrementCounter увеличивает значение counter метрики на delta.
+// Если interval=0 и filepath задан, синхронно сохраняет все метрики в файл.
 func (s *MemStorage) IncrementCounter(name string, delta int64) {
 	metrics := func() []model.Metrics {
 		s.mu.Lock()
@@ -102,9 +118,10 @@ func (s *MemStorage) IncrementCounter(name string, delta int64) {
 			log.Printf("MemStorage: ошибка сохранения: %v", err)
 		}
 	}
-
 }
 
+// GetAllGauges возвращает копию всех gauge метрик.
+// Потокобезопасен, использует RLock для чтения.
 func (s *MemStorage) GetAllGauges() map[string]float64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -117,6 +134,8 @@ func (s *MemStorage) GetAllGauges() map[string]float64 {
 	return result
 }
 
+// GetAllCounters возвращает копию всех counter метрик.
+// Потокобезопасен, использует RLock для чтения.
 func (s *MemStorage) GetAllCounters() map[string]int64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -129,6 +148,8 @@ func (s *MemStorage) GetAllCounters() map[string]int64 {
 	return result
 }
 
+// GetGauge возвращает значение gauge метрики по имени.
+// Возвращает ошибку, если метрика не найдена.
 func (s *MemStorage) GetGauge(name string) (float64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -140,6 +161,8 @@ func (s *MemStorage) GetGauge(name string) (float64, error) {
 	return val, nil
 }
 
+// GetCounter возвращает значение counter метрики по имени.
+// Возвращает ошибку, если метрика не найдена.
 func (s *MemStorage) GetCounter(name string) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -151,6 +174,8 @@ func (s *MemStorage) GetCounter(name string) (int64, error) {
 	return val, nil
 }
 
+// GetAllMetrics возвращает слайс всех метрик в формате model.Metrics.
+// Используется для сериализации в JSON при сохранении в файл.
 func (s *MemStorage) GetAllMetrics() []model.Metrics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -167,6 +192,8 @@ func (s *MemStorage) GetAllMetrics() []model.Metrics {
 	return metrics
 }
 
+// RestoreMetrics восстанавливает метрики из слайса model.Metrics.
+// Используется при загрузке из файла.
 func (s *MemStorage) RestoreMetrics(metrics []model.Metrics) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -179,6 +206,8 @@ func (s *MemStorage) RestoreMetrics(metrics []model.Metrics) {
 	}
 }
 
+// SaveToFile сохраняет все метрики в файл (если filepath задан).
+// Возвращает nil, если filepath пустой.
 func (s *MemStorage) SaveToFile() error {
 	if s.filepath == "" {
 		return nil
@@ -193,6 +222,8 @@ func (s *MemStorage) SaveToFile() error {
 	return s.saveSnapshotToFile(metrics)
 }
 
+// LoadFromFile загружает метрики из файла (если filepath задан и файл существует).
+// Возвращает nil, если файл не существует или filepath пустой.
 func (s *MemStorage) LoadFromFile() error {
 	if s.filepath == "" {
 		return nil
@@ -213,6 +244,8 @@ func (s *MemStorage) LoadFromFile() error {
 	return nil
 }
 
+// SetBatch сохраняет множество метрик.
+// Если interval=0 и filepath задан, синхронно сохраняет все метрики в файл.
 func (s *MemStorage) SetBatch(metrics []model.Metrics) error {
 	snapshot := func() []model.Metrics {
 		s.mu.Lock()
@@ -243,15 +276,13 @@ func (s *MemStorage) SetBatch(metrics []model.Metrics) error {
 	return nil
 }
 
+// snapshotLocked создаёт снапшот всех метрик (вызывается под Lock).
 func (s *MemStorage) snapshotLocked() []model.Metrics {
 	// ОПТИМИЗАЦИЯ 1: preallocate slice с нужной ёмкостью
-	// Это убирает реаллокации при append
 	totalLen := len(s.gauges) + len(s.counters)
 	metrics := make([]model.Metrics, 0, totalLen)
 
 	// ОПТИМИЗАЦИЯ 2: переиспользуем буфер значений
-	// Вместо создания новой переменной val := v на каждой итерации,
-	// используем один буфер для всех значений
 	if cap(s.gaugeBuf) < len(s.gauges) {
 		s.gaugeBuf = make([]float64, len(s.gauges))
 	}
@@ -283,6 +314,7 @@ func (s *MemStorage) snapshotLocked() []model.Metrics {
 	return metrics
 }
 
+// saveSnapshotToFile сохраняет снапшот метрик в файл.
 func (s *MemStorage) saveSnapshotToFile(metrics []model.Metrics) error {
 	data, err := json.Marshal(metrics)
 	if err != nil {

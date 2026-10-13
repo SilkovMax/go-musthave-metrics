@@ -13,14 +13,19 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
 
+// DBStorage реализует Storage на основе PostgreSQL.
+// Все операции выполняются с retry-логикой для временных ошибок подключения.
 type DBStorage struct {
 	db *sql.DB
 }
 
+// NewDBStorage создаёт новое хранилище на основе PostgreSQL.
+// Параметр db должен быть инициализированным *sql.DB с подключением к базе данных.
 func NewDBStorage(db *sql.DB) *DBStorage {
 	return &DBStorage{db: db}
 }
 
+// Ping проверяет подключение к базе данных.
 func (s *DBStorage) Ping() error {
 	return s.db.Ping()
 }
@@ -75,7 +80,8 @@ func isRetriable(err error) bool {
 	return false
 }
 
-// Запись
+// SetGauge сохраняет значение gauge метрики в PostgreSQL.
+// Использует UPSERT (INSERT ... ON CONFLICT DO UPDATE) для перезаписи существующих значений.
 func (s *DBStorage) SetGauge(name string, value float64) {
 	query := `INSERT INTO gauges (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`
@@ -86,6 +92,8 @@ func (s *DBStorage) SetGauge(name string, value float64) {
 	})
 }
 
+// IncrementCounter увеличивает значение counter метрики в PostgreSQL.
+// Использует UPSERT с инкрементом для атомарного обновления.
 func (s *DBStorage) IncrementCounter(name string, delta int64) {
 	query := `INSERT INTO counters (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`
@@ -96,7 +104,8 @@ func (s *DBStorage) IncrementCounter(name string, delta int64) {
 	})
 }
 
-// Чтение
+// GetGauge возвращает значение gauge метрики из PostgreSQL.
+// Возвращает ошибку, если метрика не найдена.
 func (s *DBStorage) GetGauge(name string) (float64, error) {
 	var value float64
 
@@ -114,6 +123,8 @@ func (s *DBStorage) GetGauge(name string) (float64, error) {
 	return value, nil
 }
 
+// GetCounter возвращает значение counter метрики из PostgreSQL.
+// Возвращает ошибку, если метрика не найдена.
 func (s *DBStorage) GetCounter(name string) (int64, error) {
 	var value int64
 
@@ -131,6 +142,8 @@ func (s *DBStorage) GetCounter(name string) (int64, error) {
 	return value, nil
 }
 
+// GetAllGauges возвращает все gauge метрики из PostgreSQL.
+// Возвращает пустую map в случае ошибки (ошибка логируется).
 func (s *DBStorage) GetAllGauges() map[string]float64 {
 	result := make(map[string]float64)
 
@@ -167,6 +180,8 @@ func (s *DBStorage) GetAllGauges() map[string]float64 {
 	return result
 }
 
+// GetAllCounters возвращает все counter метрики из PostgreSQL.
+// Возвращает пустую map в случае ошибки (ошибка логируется).
 func (s *DBStorage) GetAllCounters() map[string]int64 {
 	result := make(map[string]int64)
 
@@ -202,14 +217,15 @@ func (s *DBStorage) GetAllCounters() map[string]int64 {
 	return result
 }
 
-// обертка с ретраями
+// SetBatch сохраняет множество метрик в PostgreSQL в рамках одной транзакции.
+// Все операции выполняются атомарно: либо все метрики сохраняются, либо ни одна.
 func (s *DBStorage) SetBatch(metrics []model.Metrics) error {
 	return withRetry("SetBatch", func() error {
 		return s.executeBatchTransaction(metrics)
 	})
 }
 
-// для проверки на ретраи , логика вынесена за скобки
+// executeBatchTransaction выполняет batch-операцию в одной транзакции.
 func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 	tx, err := s.db.Begin()
 	if err != nil {

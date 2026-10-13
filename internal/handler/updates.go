@@ -9,11 +9,18 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
+// UpdatesHandler обрабатывает POST-запросы на batch-обновление метрик через JSON.
+// URL: /updates или /updates/
+// Ожидает JSON-массив метрик в теле запроса.
+// Все метрики сохраняются в одной транзакции (для DBStorage).
+// Требует Content-Type: application/json.
 type UpdatesHandler struct {
 	storage      repository.Storage
 	auditManager *audit.Manager
 }
 
+// NewUpdatesHandler создаёт новый хендлер для batch-обновления метрик.
+// Если auditManager не nil, отправляет событие аудита с именами всех обновлённых метрик.
 func NewUpdatesHandler(storage repository.Storage, auditManager *audit.Manager) *UpdatesHandler {
 	return &UpdatesHandler{
 		storage:      storage,
@@ -21,6 +28,8 @@ func NewUpdatesHandler(storage repository.Storage, auditManager *audit.Manager) 
 	}
 }
 
+// ServeHTTP обрабатывает POST-запрос с JSON-массивом метрик.
+// Возвращает 200 OK при успехе, 400/405/500 при ошибках.
 func (h *UpdatesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {

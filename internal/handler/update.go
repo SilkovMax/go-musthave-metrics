@@ -13,11 +13,17 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
+// UpdateHandler обрабатывает POST-запросы на обновление метрик через plain-text URL.
+// URL формат: /update/{type}/{name}/{value}
+// Поддерживает типы: "gauge" (перезапись) и "counter" (инкремент).
+// Требует Content-Type: text/plain (или пустой).
 type UpdateHandler struct {
 	storage      repository.Storage
 	auditManager *audit.Manager
 }
 
+// NewUpdateHandler создаёт новый хендлер для обновления метрик через URL-параметры.
+// Если auditManager не nil, отправляет события аудита при успешном обновлении.
 func NewUpdateHandler(storage repository.Storage, auditManager *audit.Manager) *UpdateHandler {
 	return &UpdateHandler{
 		storage:      storage,
@@ -25,6 +31,8 @@ func NewUpdateHandler(storage repository.Storage, auditManager *audit.Manager) *
 	}
 }
 
+// ServeHTTP обрабатывает POST-запрос на обновление одной метрики.
+// Возвращает 200 OK при успехе, 400/404 при ошибках валидации.
 func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	contentType := r.Header.Get("Content-Type")
@@ -79,11 +87,17 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 }
 
+// UpdateJSONHandler обрабатывает POST-запросы на обновление метрик через JSON.
+// URL: /update или /update/
+// Ожидает JSON в теле запроса с полями: id, type, value (для gauge) или delta (для counter).
+// Требует Content-Type: application/json.
 type UpdateJSONHandler struct {
 	storage      repository.Storage
 	auditManager *audit.Manager
 }
 
+// NewUpdateJSONHandler создаёт новый хендлер для обновления метрик через JSON.
+// Если auditManager не nil, отправляет события аудита при успешном обновлении.
 func NewUpdateJSONHandler(storage repository.Storage, auditManager *audit.Manager) *UpdateJSONHandler {
 	return &UpdateJSONHandler{
 		storage:      storage,
@@ -91,6 +105,8 @@ func NewUpdateJSONHandler(storage repository.Storage, auditManager *audit.Manage
 	}
 }
 
+// ServeHTTP обрабатывает POST-запрос с JSON-телом для обновления одной метрики.
+// Возвращает 200 OK при успехе, 400/415 при ошибках валидации.
 func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Type") != "application/json" {
 		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
@@ -129,7 +145,9 @@ func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("{}"))
 }
 
-// extractIPAddress извлекает IP-адрес из запроса.
+// extractIPAddress извлекает IP-адрес клиента из HTTP-запроса.
+// Проверяет заголовки X-Real-IP и X-Forwarded-For (для прокси),
+// затем использует RemoteAddr.
 func extractIPAddress(r *http.Request) string {
 	// Пробуем получить из заголовка X-Real-IP или X-Forwarded-For (если есть прокси)
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {

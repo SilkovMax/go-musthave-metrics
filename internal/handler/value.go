@@ -11,14 +11,20 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
+// ValueHandler обрабатывает GET-запросы на получение значения метрики через URL.
+// URL формат: /value/{type}/{name}
+// Возвращает значение метрики в теле ответа как plain-text.
 type ValueHandler struct {
 	storage repository.Storage
 }
 
+// NewValueHandler создаёт новый хендлер для получения значения метрики через URL-параметры.
 func NewValueHandler(storage repository.Storage) *ValueHandler {
 	return &ValueHandler{storage: storage}
 }
 
+// ServeHTTP обрабатывает GET-запрос и возвращает значение метрики.
+// Возвращает 200 OK с значением при успехе, 404 если метрика не найдена.
 func (h *ValueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	metricType := chi.URLParam(r, "type")
 	metricName := chi.URLParam(r, "name")
@@ -57,14 +63,21 @@ func (h *ValueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ValueJSONHandler обрабатывает POST-запросы на получение значения метрики через JSON.
+// URL: /value или /value/
+// Ожидает JSON с полями: id и type. Возвращает JSON с id, type и value/delta.
+// Требует Content-Type: application/json.
 type ValueJSONHandler struct {
 	storage repository.Storage
 }
 
+// NewValueJSONHandler создаёт новый хендлер для получения значения метрики через JSON.
 func NewValueJSONHandler(storage repository.Storage) *ValueJSONHandler {
 	return &ValueJSONHandler{storage: storage}
 }
 
+// ServeHTTP обрабатывает POST-запрос с JSON-телом для получения значения метрики.
+// Возвращает 200 OK с JSON-ответом при успехе, 400/404/415 при ошибках.
 func (h *ValueJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Type") != "application/json" {
 		w.Header().Set("Content-Type", "application/json")
