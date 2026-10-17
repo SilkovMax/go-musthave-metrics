@@ -10,6 +10,7 @@ import (
 // наблюдатель, который пишет события в файл
 type FileObserver struct {
 	filePath string
+	file     *os.File
 	mu       sync.Mutex
 }
 
@@ -19,10 +20,10 @@ func NewFileObserver(filePath string) (*FileObserver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ошибка открытия файла аудита: %w", err)
 	}
-	file.Close()
 
 	return &FileObserver{
 		filePath: filePath,
+		file:     file,
 	}, nil
 }
 
@@ -31,20 +32,21 @@ func (o *FileObserver) Send(event AuditEvent) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
-	file, err := os.OpenFile(o.filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	data, err := json.Marshal(event)
+
 	if err != nil {
 		return fmt.Errorf("ошибка открытия файла аудита: %w", err)
 	}
-	defer file.Close()
-
-	data, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации события аудита: %w", err)
-	}
-
-	if _, err := file.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("ошибка записи события аудита: %w", err)
+	// Пишем прямо в открытый файл + перенос строки
+	if _, err := o.file.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("failed to write audit event: %w", err)
 	}
 
 	return nil
+}
+
+func (o *FileObserver) Close() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.file.Close()
 }

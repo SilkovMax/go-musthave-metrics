@@ -2,6 +2,7 @@ package audit
 
 import (
 	"log"
+	"sync/atomic"
 )
 
 // Принимает события от хендлеров и рассылает их наблюдателям
@@ -9,6 +10,7 @@ type Manager struct {
 	observers []Observer
 	eventCh   chan AuditEvent
 	stopCh    chan struct{}
+	stopped   atomic.Bool
 }
 
 func NewManager() *Manager {
@@ -30,22 +32,26 @@ func (m *Manager) AddObserver(observer Observer) {
 
 // Отправляем событие всем наблюдателям
 func (m *Manager) Notify(event AuditEvent) {
-	// Если буфер полон — логируем и пропускаем событие
+	if m.stopped.Load() {
+		return
+	}
+
 	select {
 	case m.eventCh <- event:
-		// событие успешно добавлено в очередь
 	default:
 		log.Printf("AuditManager: очередь событий переполнена, событие пропущено")
 	}
 }
 
 func (m *Manager) Stop() {
+	// Сначала сигнализируем об остановке
+	m.stopped.Store(true)
 	close(m.stopCh)
-	close(m.eventCh)
 }
 
 // горутина, которая читает события из канала и рассылает наблюдателям\
 func (m *Manager) processEvents() {
+	defer close(m.eventCh)
 	for {
 		select {
 		case event, ok := <-m.eventCh:
