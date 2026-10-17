@@ -2,23 +2,37 @@ package handler
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
+// UpdateHandler обрабатывает POST-запросы на обновление метрик через plain-text URL.
+// URL формат: /update/{type}/{name}/{value}
+// Поддерживает типы: "gauge" (перезапись) и "counter" (инкремент).
+// Требует Content-Type: text/plain (или пустой).
 type UpdateHandler struct {
-	storage repository.Storage
+	storage      repository.Storage
+	auditManager *audit.Manager
 }
 
-func NewUpdateHandler(storage repository.Storage) *UpdateHandler {
-	return &UpdateHandler{storage: storage}
+// NewUpdateHandler создаёт новый хендлер для обновления метрик через URL-параметры.
+// Если auditManager не nil, отправляет события аудита при успешном обновлении.
+func NewUpdateHandler(storage repository.Storage, auditManager *audit.Manager) *UpdateHandler {
+	return &UpdateHandler{
+		storage:      storage,
+		auditManager: auditManager,
+	}
 }
 
+// ServeHTTP обрабатывает POST-запрос на обновление одной метрики.
+// Возвращает 200 OK при успехе, 400/404 при ошибках валидации.
 func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	contentType := r.Header.Get("Content-Type")
@@ -60,20 +74,39 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if h.auditManager != nil {
+		metrics := []string{metricName}
+		ipAddress := extractIPAddress(r)
+		event := audit.NewAuditEvent(metrics, ipAddress)
+		h.auditManager.Notify(event)
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("{}")) //Для автотестов
 
 }
 
+// UpdateJSONHandler обрабатывает POST-запросы на обновление метрик через JSON.
+// URL: /update или /update/
+// Ожидает JSON в теле запроса с полями: id, type, value (для gauge) или delta (для counter).
+// Требует Content-Type: application/json.
 type UpdateJSONHandler struct {
-	storage repository.Storage
+	storage      repository.Storage
+	auditManager *audit.Manager
 }
 
-func NewUpdateJSONHandler(storage repository.Storage) *UpdateJSONHandler {
-	return &UpdateJSONHandler{storage: storage}
+// NewUpdateJSONHandler создаёт новый хендлер для обновления метрик через JSON.
+// Если auditManager не nil, отправляет события аудита при успешном обновлении.
+func NewUpdateJSONHandler(storage repository.Storage, auditManager *audit.Manager) *UpdateJSONHandler {
+	return &UpdateJSONHandler{
+		storage:      storage,
+		auditManager: auditManager,
+	}
 }
 
+// ServeHTTP обрабатывает POST-запрос с JSON-телом для обновления одной метрики.
+// Возвращает 200 OK при успехе, 400/415 при ошибках валидации.
 func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Type") != "application/json" {
 		http.Error(w, "unsupported media type", http.StatusUnsupportedMediaType)
@@ -100,5 +133,34 @@ func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.auditManager != nil {
+		metrics := []string{m.ID}
+		ipAddress := extractIPAddress(r)
+		event := audit.NewAuditEvent(metrics, ipAddress)
+		h.auditManager.Notify(event)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("{}"))
+}
+
+// extractIPAddress извлекает IP-адрес клиента из HTTP-запроса.
+// Проверяет заголовки X-Real-IP и X-Forwarded-For (для прокси),
+// затем использует RemoteAddr.
+func extractIPAddress(r *http.Request) string {
+	// Пробуем получить из заголовка X-Real-IP или X-Forwarded-For (если есть прокси)
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
+		return ip
+	}
+
+	// Иначе берём из RemoteAddr (IP:Port)
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
