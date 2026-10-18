@@ -17,7 +17,7 @@ func TestSendGauge(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "123")
 	err := client.SendGauge("cpu", 45.5)
 	if err != nil {
 		t.Fatalf("SendGauge вернул ошибку: %v", err)
@@ -38,7 +38,7 @@ func TestSendCounter(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(server.URL)
+	client := NewClient(server.URL, "123")
 	err := client.SendCounter("requests", 5)
 	if err != nil {
 		t.Fatalf("SendCounter вернул ошибку: %v", err)

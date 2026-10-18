@@ -1,9 +1,12 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"strconv"
 	"time"
@@ -11,6 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
+	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
@@ -47,6 +52,12 @@ func main() {
 	storeInterval := flag.Int("i", 300, "store interval in seconds")
 	fileStoragePath := flag.String("f", "metrics.json", "file storage path")
 	restore := flag.Bool("r", false, "reatore metrics from file on start app")
+	auditFile := flag.String("audit-file", "", "path to audit log file")
+	auditURL := flag.String("audit-url", "", "URL to send audit events")
+
+	databaseDSN := flag.String("d", "", "connect to DB")
+
+	hashKey := flag.String("k", "", "HMAC key for signing requests")
 
 	flag.Parse()
 
@@ -79,33 +90,115 @@ func main() {
 		}
 	}
 
+	if envDSN := os.Getenv("DATABASE_DSN"); envDSN != "" {
+		*databaseDSN = envDSN
+	}
+
+	if envKey := os.Getenv("KEY"); envKey != "" {
+		*hashKey = envKey
+	}
+
+	if envAuditFile := os.Getenv("AUDIT_FILE"); envAuditFile != "" {
+		*auditFile = envAuditFile
+	}
+
+	if envAuditURL := os.Getenv("AUDIT_URL"); envAuditURL != "" {
+		*auditURL = envAuditURL
+	}
+
 	defer Log.Sync()
 
-	intervalDuration := time.Duration(*storeInterval) * time.Second
-	storage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
+	var sqlDB *sql.DB
 
-	defer storage.Stop()
+	var storage repository.Storage
+
+	if *databaseDSN != "" {
+		var err error
+		sqlDB, err = db.New(*databaseDSN)
+		if err != nil {
+			Log.Fatal("Ошибка подключения к базе данных", zap.Error(err))
+		}
+		defer sqlDB.Close()
+		storage = repository.NewDBStorage(sqlDB)
+		Log.Info("Успешно подключено к PostgreSQL")
+	} else {
+
+		intervalDuration := time.Duration(*storeInterval) * time.Second
+		memStorage := repository.NewMemStorage(*fileStoragePath, intervalDuration, *restore)
+
+		storage = memStorage
+		defer memStorage.Stop()
+		Log.Info("Используется файловое хранилище")
+	}
+
+	// СОЗДАНИЕ AUDIT MANAGER!
+	var auditManager *audit.Manager
+
+	if *auditFile != "" || *auditURL != "" {
+		auditManager = audit.NewManager()
+
+		// Добавляем FileObserver если указан файл
+		if *auditFile != "" {
+			fileObserver, err := audit.NewFileObserver(*auditFile)
+			if err != nil {
+				Log.Error("Ошибка создания FileObserver", zap.Error(err))
+			} else {
+				auditManager.AddObserver(fileObserver)
+				Log.Info("FileObserver добавлен", zap.String("file", *auditFile))
+			}
+		}
+
+		// Добавляем HTTPObserver если указан URL
+		if *auditURL != "" {
+			httpObserver := audit.NewHTTPObserver(*auditURL)
+			auditManager.AddObserver(httpObserver)
+			Log.Info("HTTPObserver добавлен", zap.String("url", *auditURL))
+		}
+
+		// Откладываем остановку менеджера
+		defer auditManager.Stop()
+	}
 
 	r := chi.NewRouter()
 
 	r.Use(middleware.GzipMiddleware)
+	r.Use(middleware.HashRequestMiddleware(*hashKey))
+	r.Use(middleware.HashResponseMiddleware(*hashKey))
 
 	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))
 
-	r.Post("/update", handler.NewUpdateJSONHandler(storage).ServeHTTP)
-	r.Post("/update/", handler.NewUpdateJSONHandler(storage).ServeHTTP) //для автотеста
+	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
+		if sqlDB != nil {
+			if err := sqlDB.Ping(); err != nil {
+				http.Error(w, "database ping failed", http.StatusInternalServerError)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	r.Post("/update", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP)
+	r.Post("/update/", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP) //для автотеста
+
+	r.Post("/updates", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
+	r.Post("/updates/", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
 
 	r.Post("/value", handler.NewValueJSONHandler(storage).ServeHTTP)
 	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP) //для автотеста
 
-	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage).ServeHTTP)
+	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage, auditManager).ServeHTTP)
 
 	r.Get("/value/{type}/{name}", handler.NewValueHandler(storage).ServeHTTP)
 
 	r.Get("/", handler.NewIndexHandler(storage).ServeHTTP)
 
 	Log.Info("Сервер запущен", zap.String("address", *address))
+
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil)) // pprof endpoint
+	}()
+
 	err := http.ListenAndServe(*address, r)
 	if err != nil {
 		Log.Fatal("Ошибка запуска сервера", zap.Error(err))
