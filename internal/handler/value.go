@@ -42,7 +42,7 @@ func (h *ValueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "%g", value)
+		_, _ = fmt.Fprintf(w, "%g", value)
 
 	case "counter":
 		counters := h.storage.GetAllCounters()
@@ -55,7 +55,7 @@ func (h *ValueHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, "%d", value)
+		_, _ = fmt.Fprintf(w, "%d", value)
 
 	default:
 		http.Error(w, "Invalid metric type", http.StatusNotFound)
@@ -122,5 +122,5 @@ func (h *ValueJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_= json.NewEncoder(w).Encode(resp)
 }

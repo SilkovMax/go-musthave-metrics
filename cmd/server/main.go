@@ -106,7 +106,11 @@ func main() {
 		*auditURL = envAuditURL
 	}
 
-	defer Log.Sync()
+	defer func() {
+		if err := Log.Sync(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+		}
+	}()
 
 	var sqlDB *sql.DB
 
@@ -118,7 +122,11 @@ func main() {
 		if err != nil {
 			Log.Fatal("Ошибка подключения к базе данных", zap.Error(err))
 		}
-		defer sqlDB.Close()
+		defer func() {
+			if closeErr := sqlDB.Close(); closeErr != nil {
+				Log.Error("Ошибка закрытия БД", zap.Error(closeErr))
+			}
+		}()
 		storage = repository.NewDBStorage(sqlDB)
 		Log.Info("Успешно подключено к PostgreSQL")
 	} else {
