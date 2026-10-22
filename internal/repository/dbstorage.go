@@ -86,10 +86,13 @@ func (s *DBStorage) SetGauge(name string, value float64) {
 	query := `INSERT INTO gauges (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`
 
-	withRetry("SetGauge", func() error {
+	err := withRetry("SetGauge", func() error {
 		_, err := s.db.Exec(query, name, value)
 		return err
 	})
+	if err != nil {
+		log.Printf("DBStorage: SetGauge failed after retries: %v", err)
+	}
 }
 
 // IncrementCounter увеличивает значение counter метрики в PostgreSQL.
@@ -98,10 +101,15 @@ func (s *DBStorage) IncrementCounter(name string, delta int64) {
 	query := `INSERT INTO counters (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`
 
-	withRetry("IncrementCounter", func() error {
+
+	err := withRetry("IncrementCounter", func() error {
 		_, err := s.db.Exec(query, name, delta)
 		return err
 	})
+	if err != nil {
+		log.Printf("DBStorage: IncrementCounter failed after retries: %v", err)
+	}
+
 }
 
 // GetGauge возвращает значение gauge метрики из PostgreSQL.
@@ -152,7 +160,11 @@ func (s *DBStorage) GetAllGauges() map[string]float64 {
 		if err != nil {
 			return err
 		}
-		defer rows.Close() // defer снаружи цикла
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil {
+				log.Printf("DBStorage: error closing rows: %v", closeErr)
+			}
+		}()
 
 		result = make(map[string]float64)
 
@@ -190,7 +202,11 @@ func (s *DBStorage) GetAllCounters() map[string]int64 {
 		if err != nil {
 			return err
 		}
-		defer rows.Close() // defer снаружи цикла
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil {
+				log.Printf("DBStorage: error closing rows: %v", closeErr)
+			}
+		}()
 
 		result = make(map[string]int64)
 
@@ -235,18 +251,30 @@ func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 	gaugeStmt, err := tx.Prepare(`INSERT INTO gauges (name, value) VALUES ($1, $2)
 	                              ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`)
 	if err != nil {
-		tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil {
+			log.Printf("failed to rollback transaction: %v", rbErr)
+		}
 		return fmt.Errorf("prepare gauge stmt: %w", err)
 	}
-	defer gaugeStmt.Close()
+	defer func() {
+		if closeErr := gaugeStmt.Close(); closeErr != nil {
+			log.Printf("DBStorage: error closing gaugeStmt: %v", closeErr)
+		}
+	}()
 
 	counterStmt, err := tx.Prepare(`INSERT INTO counters (name, value) VALUES ($1, $2)
 	                                ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`)
 	if err != nil {
-		tx.Rollback()
+		if rbErr := tx.Rollback(); rbErr != nil {
+    log.Printf("failed to rollback transaction: %v", rbErr)
+}
 		return fmt.Errorf("prepare counter stmt: %w", err)
 	}
-	defer counterStmt.Close()
+	defer func() {
+		if closeErr := counterStmt.Close(); closeErr != nil {
+			log.Printf("DBStorage: error closing counterStmt: %v", closeErr)
+		}
+	}()
 
 	for _, m := range metrics {
 		switch m.MType {
@@ -255,7 +283,9 @@ func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 				continue
 			}
 			if _, err := gaugeStmt.Exec(m.ID, *m.Value); err != nil {
-				tx.Rollback()
+				if rbErr := tx.Rollback(); rbErr != nil {
+    log.Printf("failed to rollback transaction: %v", rbErr)
+}
 				return fmt.Errorf("exec gauge %s: %w", m.ID, err)
 			}
 		case "counter":
@@ -263,7 +293,9 @@ func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 				continue
 			}
 			if _, err := counterStmt.Exec(m.ID, *m.Delta); err != nil {
-				tx.Rollback()
+				if rbErr := tx.Rollback(); rbErr != nil {
+    log.Printf("failed to rollback transaction: %v", rbErr)
+}
 				return fmt.Errorf("exec counter %s: %w", m.ID, err)
 			}
 		}

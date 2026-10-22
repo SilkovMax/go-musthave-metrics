@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+	"log"
 )
 
 // наблюдатель, который отправляет события по HTTP POST
@@ -36,7 +37,11 @@ func (o *HTTPObserver) Send(event AuditEvent) error {
 	if err != nil {
 		return fmt.Errorf("ошибка отправки события аудита: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Printf("ошибка в закрытие боди: %v", err)
+		}
+	}()
 
 	// Проверяем статус код
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
