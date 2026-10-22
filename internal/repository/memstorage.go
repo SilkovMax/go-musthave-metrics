@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"time"
+	"fmt"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
@@ -22,8 +23,8 @@ type MemStorage struct {
 	mu         sync.RWMutex
 	gauges     map[string]float64
 	counters   map[string]int64
-	gaugeBuf   []float64
-	counterBuf []int64
+	//gaugeBuf   []float64
+	//counterBuf []int64
 
 	filepath string
 	interval time.Duration
@@ -45,7 +46,9 @@ func NewMemStorage(filepath string, interval time.Duration, restore bool) *MemSt
 	}
 
 	if restore && filepath != "" {
-		s.LoadFromFile()
+		if err := s.LoadFromFile(); err != nil {
+			log.Printf("MemStorage: error loading from file on start: %v", err)
+		}
 	}
 
 	if interval > 0 && filepath != "" {
@@ -69,7 +72,9 @@ func (s *MemStorage) backgroundSave() {
 	for {
 		select {
 		case <-ticker.C:
-			s.SaveToFile()
+			if err := s.SaveToFile(); err != nil {
+				log.Printf("MemStorage: background save error: %v", err)
+			}
 		case <-s.stopCh:
 			return
 		}
@@ -309,15 +314,24 @@ func (s *MemStorage) snapshotLocked() []model.Metrics {
 func (s *MemStorage) saveSnapshotToFile(metrics []model.Metrics) error {
 	data, err := json.Marshal(metrics)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal metrics: %w", err)
 	}
 
 	file, err := os.Create(s.filepath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create file: %w", err)
 	}
-	defer file.Close()
 
-	_, err = file.Write(data)
-	return err
+	// проверяем ошибку закрытия файла
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Printf("MemStorage: ошибка при закрытии файла %s: %v", s.filepath, closeErr)
+		}
+	}()
+
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("failed to write to file: %w", err)
+	}
+
+	return nil
 }
