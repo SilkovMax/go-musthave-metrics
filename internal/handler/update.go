@@ -11,6 +11,8 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
+
+	"github.com/SilkovMax/go-musthave-metrics/internal/pool"
 )
 
 // UpdateHandler обрабатывает POST-запросы на обновление метрик через plain-text URL.
@@ -21,6 +23,11 @@ type UpdateHandler struct {
 	storage      repository.Storage
 	auditManager *audit.Manager
 }
+
+// Глобальный пул для переиспользования объектов Metrics
+var metricsPool = pool.New(func() *model.Metrics {
+	return &model.Metrics{}
+})
 
 // NewUpdateHandler создаёт новый хендлер для обновления метрик через URL-параметры.
 // Если auditManager не nil, отправляет события аудита при успешном обновлении.
@@ -83,7 +90,7 @@ func (h *UpdateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("{}")) //Для автотестов
+	_, _ = w.Write([]byte("{}")) //Для автотестов
 
 }
 
@@ -113,11 +120,15 @@ func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var m model.Metrics
-	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+	// Получаем объект из пула вместо создания нового
+	m := metricsPool.Get()
+	defer metricsPool.Put(m) // Возвращаем в пул после использования (Reset вызовется автоматически)
+
+	if err := json.NewDecoder(r.Body).Decode(m); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+
 
 	switch m.MType {
 	case model.Gauge:
@@ -142,7 +153,7 @@ func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("{}"))
+	_, _ = w.Write([]byte("{}"))
 }
 
 // extractIPAddress извлекает IP-адрес клиента из HTTP-запроса.
