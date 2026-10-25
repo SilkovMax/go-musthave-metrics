@@ -14,7 +14,16 @@ import (
 	"os"
 )
 
+// Глобальные переменные для информации о сборке.
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 func main() {
+	// Выводим информацию о сборке
+	printBuildInfo()
 
 	address := flag.String("a", "localhost:8080", "address and port to run server")
 	reportInterval := flag.Int("r", 10, "report interval in seconds")
@@ -153,4 +162,26 @@ func main() {
 		jobs <- batch
 		fmt.Println("Батч добавлен в очередь")
 	}
+}
+
+// printBuildInfo выводит информацию о версии сборки в stdout.
+func printBuildInfo() {
+	version := buildVersion
+	if version == "" {
+		version = "N/A"
+	}
+
+	date := buildDate
+	if date == "" {
+		date = "N/A"
+	}
+
+	commit := buildCommit
+	if commit == "" {
+		commit = "N/A"
+	}
+
+	fmt.Printf("Build version: %s\n", version)
+	fmt.Printf("Build date: %s\n", date)
+	fmt.Printf("Build commit: %s\n", commit)
 }

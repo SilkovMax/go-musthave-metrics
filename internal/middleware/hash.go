@@ -73,7 +73,7 @@ func HashResponseMiddleware(key string) func(http.Handler) http.Handler {
 
 			w.WriteHeader(crw.statusCode)
 
-			w.Write(crw.body.Bytes())
+			_, _ = w.Write(crw.body.Bytes())
 		})
 	}
 }

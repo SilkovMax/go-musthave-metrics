@@ -21,6 +21,14 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
+// Глобальные переменные для информации о сборке.
+// Их значения подменяются на этапе линковки через флаг -ldflags "-X main.buildVersion=..."
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
+
 var Log *zap.Logger = zap.NewNop()
 
 // Initialize инициализирует синглтон логера с необходимым уровнем логирования.
@@ -45,6 +53,8 @@ func Initialize(level string) error {
 }
 
 func main() {
+	// Выводим информацию о сборке
+	printBuildInfo()
 	//add flag on address + port
 	address := flag.String("a", "localhost:8080", "address and port to run server")
 	logLevel := flag.String("l", "info", "log level")
@@ -106,7 +116,11 @@ func main() {
 		*auditURL = envAuditURL
 	}
 
-	defer Log.Sync()
+	defer func() {
+		if err := Log.Sync(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+		}
+	}()
 
 	var sqlDB *sql.DB
 
@@ -118,7 +132,11 @@ func main() {
 		if err != nil {
 			Log.Fatal("Ошибка подключения к базе данных", zap.Error(err))
 		}
-		defer sqlDB.Close()
+		defer func() {
+			if closeErr := sqlDB.Close(); closeErr != nil {
+				Log.Error("Ошибка закрытия БД", zap.Error(closeErr))
+			}
+		}()
 		storage = repository.NewDBStorage(sqlDB)
 		Log.Info("Успешно подключено к PostgreSQL")
 	} else {
@@ -203,4 +221,26 @@ func main() {
 	if err != nil {
 		Log.Fatal("Ошибка запуска сервера", zap.Error(err))
 	}
+}
+
+// printBuildInfo выводит информацию о версии сборки в stdout.
+func printBuildInfo() {
+	version := buildVersion
+	if version == "" {
+		version = "N/A"
+	}
+
+	date := buildDate
+	if date == "" {
+		date = "N/A"
+	}
+
+	commit := buildCommit
+	if commit == "" {
+		commit = "N/A"
+	}
+
+	fmt.Printf("Build version: %s\n", version)
+	fmt.Printf("Build date: %s\n", date)
+	fmt.Printf("Build commit: %s\n", commit)
 }
