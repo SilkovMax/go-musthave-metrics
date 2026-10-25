@@ -9,5 +9,5 @@ import (
 func TestAnalyzer(t *testing.T) {
 	// analysistest.Run ищет файлы в директории testdata
 	// Файлы с суффиксом .go, содержащие комментарии "// want", будут проверены
-	analysistest.Run(t, "testdata_dir", Analyzer, "a")
+	analysistest.Run(t, analysistest.TestData(), Analyzer, "a")
 }

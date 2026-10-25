@@ -1,4 +1,3 @@
-// Package noosexit предоставляет анализатор, запрещающий использование os.Exit в функции main.
 package noosexit
 
 import (
@@ -12,7 +11,6 @@ import (
 )
 
 // Analyzer запрещает прямые вызовы os.Exit внутри функции main пакета main.
-// Вместо этого рекомендуется использовать log.Fatal или возврат ошибки.
 var Analyzer = &analysis.Analyzer{
 	Name:     "noosexit",
 	Doc:      "reports direct os.Exit calls in the main function of the main package",
@@ -21,35 +19,30 @@ var Analyzer = &analysis.Analyzer{
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
-	// 1. Проверяем, что это пакет main
+	// 1. Работаем только с пакетом main
 	if pass.Pkg.Name() != "main" {
-		return nil, nil
-	}
-
-	// 2. Пропускаем тестовые файлы и временные директории
-	// Проверяем путь пакета — если он содержит "testdata" или временные пути, пропускаем
-	pkgPath := pass.Pkg.Path()
-	if strings.Contains(pkgPath, "testdata") ||
-	   strings.Contains(pkgPath, "go-build") ||
-	   strings.Contains(pkgPath, "testmain") {
 		return nil, nil
 	}
 
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	nodeFilter := []ast.Node{(*ast.FuncDecl)(nil)}
 
-	// 3. Ищем функцию main
 	insp.Preorder(nodeFilter, func(n ast.Node) {
 		fn := n.(*ast.FuncDecl)
+
+		// 2. Ищем именно функцию main (без receiver)
 		if fn.Name.Name == "main" && fn.Recv == nil {
-			// 4. Дополнительная проверка: пропускаем файлы из testdata
+
+			// 3. Получаем абсолютный путь к файлу
 			filename := pass.Fset.Position(fn.Pos()).Filename
-			if strings.Contains(filename, "testdata") ||
-			   strings.Contains(filename, "go-build") {
+
+			// Игнорируем временные файлы кэша, системные папки и testdata
+			if strings.Contains(filename, "go-build") ||
+				strings.Contains(filename, "AppData") {
 				return
 			}
 
-			// 5. Рекурсивно обходим AST функции main в поисках вызовов
+			// 4. Рекурсивно обходим AST функции main в поисках вызовов
 			ast.Inspect(fn, func(node ast.Node) bool {
 				call, ok := node.(*ast.CallExpr)
 				if !ok {
@@ -60,9 +53,9 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
 					if sel.Sel.Name == "Exit" {
 						if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "os" {
-							// 6. Проверяем через types.Info, что это действительно пакет "os"
+							// 5. Убеждаемся через types.Info, что 'os' — это именно импортированный пакет
 							if obj := pass.TypesInfo.ObjectOf(ident); obj != nil {
-								if pkg, ok := obj.(*types.PkgName); ok && pkg.Imported().Path() == "os" {
+								if _, ok := obj.(*types.PkgName); ok {
 									pass.Reportf(call.Pos(), "do not use os.Exit in main function, use log.Fatal or return an error instead")
 								}
 							}

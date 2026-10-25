@@ -128,12 +128,17 @@ func generateResetMethod(structName string, structType *ast.StructType, pkg *pac
 			continue
 		}
 
-		fieldName := field.Names[0].Name
 		fieldType := pkg.TypesInfo.TypeOf(field.Type)
+		if fieldType == nil {
+			continue
+		}
 
-		logic := generateFieldResetLogic(fieldName, fieldType)
-		if logic != "" {
-			bodyLines = append(bodyLines, logic)
+		for _, name := range field.Names {
+			fieldName := name.Name
+			logic := generateFieldResetLogic(fieldName, fieldType)
+			if logic != "" {
+				bodyLines = append(bodyLines, logic)
+			}
 		}
 	}
 
@@ -154,7 +159,6 @@ func generateFieldResetLogic(fieldName string, t types.Type) string {
 			zero := getBasicZero(basic.Kind())
 			return fmt.Sprintf("\tif rs.%s != nil {\n\t\t*rs.%s = %s\n\t}", fieldName, fieldName, zero)
 		}
-		// Для указателей на структуры, интерфейсы и именованные типы используем type assertion
 		return fmt.Sprintf("\tif rs.%s != nil {\n\t\tif r, ok := any(rs.%s).(interface{ Reset() }); ok {\n\t\t\tr.Reset()\n\t\t}\n\t}", fieldName, fieldName)
 
 	case *types.Slice:
@@ -164,13 +168,23 @@ func generateFieldResetLogic(fieldName string, t types.Type) string {
 		return fmt.Sprintf("\tclear(rs.%s)", fieldName)
 
 	case *types.Struct:
-		return fmt.Sprintf("\trs.%s.Reset()", fieldName)
+		return fmt.Sprintf("\tif r, ok := any(&rs.%s).(interface{ Reset() }); ok {\n\t\tr.Reset()\n\t}", fieldName)
 
-	case *types.Named, *types.Interface:
-		// Для именованных типов и интерфейсов проверяем наличие метода Reset()
-		return fmt.Sprintf("\tif r, ok := any(rs.%s).(interface{ Reset() }); ok {\n\t\tr.Reset()\n\t}", fieldName)
+	case *types.Named:
+		return fmt.Sprintf("\tif r, ok := any(&rs.%s).(interface{ Reset() }); ok {\n\t\tr.Reset()\n\t}", fieldName)
+
+	case *types.Interface:
+		return fmt.Sprintf("\tif r, ok := any(rs.%s).(interface{ Reset() }); ok && rs.%s != nil {\n\t\tr.Reset()\n\t}", fieldName, fieldName)
+
+	case *types.Chan, *types.Signature:
+		return fmt.Sprintf("\trs.%s = nil", fieldName)
+
+	case *types.Array:
+		return fmt.Sprintf("\trs.%s = [0]{}", fieldName)
+
+	default:
+		return ""
 	}
-	return ""
 }
 
 // getBasicZero возвращает строковое представление нулевого значения для примитивного типа.

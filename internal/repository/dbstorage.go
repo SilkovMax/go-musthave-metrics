@@ -101,7 +101,6 @@ func (s *DBStorage) IncrementCounter(name string, delta int64) {
 	query := `INSERT INTO counters (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`
 
-
 	err := withRetry("IncrementCounter", func() error {
 		_, err := s.db.Exec(query, name, delta)
 		return err
@@ -241,6 +240,14 @@ func (s *DBStorage) SetBatch(metrics []model.Metrics) error {
 	})
 }
 
+// rollbackWithError откатывает транзакцию и возвращает оригинальную ошибку.
+func rollbackWithError(tx *sql.Tx, originalErr error) error {
+	if rbErr := tx.Rollback(); rbErr != nil {
+		log.Printf("DBStorage: ошибка отката транзакции: %v (оригинальная ошибка: %v)", rbErr, originalErr)
+	}
+	return originalErr
+}
+
 // executeBatchTransaction выполняет batch-операцию в одной транзакции.
 func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 	tx, err := s.db.Begin()
@@ -251,28 +258,22 @@ func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 	gaugeStmt, err := tx.Prepare(`INSERT INTO gauges (name, value) VALUES ($1, $2)
 	                              ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`)
 	if err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Printf("failed to rollback transaction: %v", rbErr)
-		}
-		return fmt.Errorf("prepare gauge stmt: %w", err)
+		return rollbackWithError(tx, fmt.Errorf("prepare gauge stmt: %w", err))
 	}
 	defer func() {
 		if closeErr := gaugeStmt.Close(); closeErr != nil {
-			log.Printf("DBStorage: error closing gaugeStmt: %v", closeErr)
+			log.Printf("DBStorage: ошибка закрытия gaugeStmt: %v", closeErr)
 		}
 	}()
 
 	counterStmt, err := tx.Prepare(`INSERT INTO counters (name, value) VALUES ($1, $2)
 	                                ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`)
 	if err != nil {
-		if rbErr := tx.Rollback(); rbErr != nil {
-    log.Printf("failed to rollback transaction: %v", rbErr)
-}
-		return fmt.Errorf("prepare counter stmt: %w", err)
+		return rollbackWithError(tx, fmt.Errorf("prepare counter stmt: %w", err))
 	}
 	defer func() {
 		if closeErr := counterStmt.Close(); closeErr != nil {
-			log.Printf("DBStorage: error closing counterStmt: %v", closeErr)
+			log.Printf("DBStorage: ошибка закрытия counterStmt: %v", closeErr)
 		}
 	}()
 
@@ -283,23 +284,21 @@ func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 				continue
 			}
 			if _, err := gaugeStmt.Exec(m.ID, *m.Value); err != nil {
-				if rbErr := tx.Rollback(); rbErr != nil {
-    log.Printf("failed to rollback transaction: %v", rbErr)
-}
-				return fmt.Errorf("exec gauge %s: %w", m.ID, err)
+				return rollbackWithError(tx, fmt.Errorf("exec gauge %s: %w", m.ID, err))
 			}
 		case "counter":
 			if m.Delta == nil {
 				continue
 			}
 			if _, err := counterStmt.Exec(m.ID, *m.Delta); err != nil {
-				if rbErr := tx.Rollback(); rbErr != nil {
-    log.Printf("failed to rollback transaction: %v", rbErr)
-}
-				return fmt.Errorf("exec counter %s: %w", m.ID, err)
+				return rollbackWithError(tx, fmt.Errorf("exec counter %s: %w", m.ID, err))
 			}
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return rollbackWithError(tx, fmt.Errorf("commit transaction: %w", err))
+	}
+
+	return nil
 }

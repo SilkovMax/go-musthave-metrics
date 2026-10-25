@@ -3,11 +3,11 @@ package repository
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"sync"
 	"time"
-	"fmt"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
@@ -20,9 +20,9 @@ import (
 //   - interval: интервал периодического сохранения (0 = синхронное сохранение при каждом update)
 //   - restore: загружать ли метрики из файла при старте
 type MemStorage struct {
-	mu         sync.RWMutex
-	gauges     map[string]float64
-	counters   map[string]int64
+	mu       sync.RWMutex
+	gauges   map[string]float64
+	counters map[string]int64
 	//gaugeBuf   []float64
 	//counterBuf []int64
 

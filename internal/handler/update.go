@@ -129,7 +129,6 @@ func (h *UpdateJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
 	switch m.MType {
 	case model.Gauge:
 		if m.Value != nil {
