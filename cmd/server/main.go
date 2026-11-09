@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
 	"database/sql"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
@@ -21,7 +24,59 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
+// Глобальные переменные для информации о сборке.
+// Их значения подменяются на этапе линковки через флаг -ldflags "-X main.buildVersion=..."
+var (
+	buildVersion  string
+	buildDate     string
+	buildCommit   string
+	cryptoKeyPath string
+)
+
 var Log *zap.Logger = zap.NewNop()
+
+// getEnv получает значение переменной окружения или возвращает fallback
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+// loadPrivateKey загружает и парсит RSA приватный ключ из PEM-файла.
+func loadPrivateKey(path string) (*rsa.PrivateKey, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	keyData, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read private key file: %w", err)
+	}
+
+	block, _ := pem.Decode(keyData)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block containing private key")
+	}
+
+	// Пробуем распарсить как PKCS#1 (BEGIN RSA PRIVATE KEY)
+	privKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err == nil {
+		return privKey, nil
+	}
+
+	// Если не вышло, пробуем как PKCS#8 (BEGIN PRIVATE KEY)
+	parsedKey, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	if rsaKey, ok := parsedKey.(*rsa.PrivateKey); ok {
+		return rsaKey, nil
+	}
+
+	return nil, fmt.Errorf("private key is not an RSA key")
+}
 
 // Initialize инициализирует синглтон логера с необходимым уровнем логирования.
 func Initialize(level string) error {
@@ -45,6 +100,8 @@ func Initialize(level string) error {
 }
 
 func main() {
+	// Выводим информацию о сборке
+	printBuildInfo()
 	//add flag on address + port
 	address := flag.String("a", "localhost:8080", "address and port to run server")
 	logLevel := flag.String("l", "info", "log level")
@@ -58,6 +115,7 @@ func main() {
 	databaseDSN := flag.String("d", "", "connect to DB")
 
 	hashKey := flag.String("k", "", "HMAC key for signing requests")
+	flag.StringVar(&cryptoKeyPath, "crypto-key", getEnv("CRYPTO_KEY", ""), "path to private key file")
 
 	flag.Parse()
 
@@ -106,19 +164,36 @@ func main() {
 		*auditURL = envAuditURL
 	}
 
-	defer Log.Sync()
+	defer func() {
+		if err := Log.Sync(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to sync logger: %v\n", err)
+		}
+	}()
+
+	// Загрузка приватного ключа
+	privKey, err := loadPrivateKey(cryptoKeyPath)
+	if err != nil {
+		Log.Fatal("Ошибка загрузки приватного ключа", zap.Error(err))
+	}
+	if privKey != nil {
+		Log.Info("Приватный ключ успешно загружен. Шифрование включено.")
+	}
 
 	var sqlDB *sql.DB
 
 	var storage repository.Storage
 
 	if *databaseDSN != "" {
-		var err error
-		sqlDB, err = db.New(*databaseDSN)
-		if err != nil {
-			Log.Fatal("Ошибка подключения к базе данных", zap.Error(err))
+		var dbErr error
+		sqlDB, dbErr = db.New(*databaseDSN)
+		if dbErr != nil {
+			Log.Fatal("Ошибка подключения к базе данных", zap.Error(dbErr))
 		}
-		defer sqlDB.Close()
+		defer func() {
+			if closeErr := sqlDB.Close(); closeErr != nil {
+				Log.Error("Ошибка закрытия БД", zap.Error(closeErr))
+			}
+		}()
 		storage = repository.NewDBStorage(sqlDB)
 		Log.Info("Успешно подключено к PostgreSQL")
 	} else {
@@ -139,9 +214,9 @@ func main() {
 
 		// Добавляем FileObserver если указан файл
 		if *auditFile != "" {
-			fileObserver, err := audit.NewFileObserver(*auditFile)
-			if err != nil {
-				Log.Error("Ошибка создания FileObserver", zap.Error(err))
+			fileObserver, fileErr := audit.NewFileObserver(*auditFile)
+			if fileErr != nil {
+				Log.Error("Ошибка создания FileObserver", zap.Error(fileErr))
 			} else {
 				auditManager.AddObserver(fileObserver)
 				Log.Info("FileObserver добавлен", zap.String("file", *auditFile))
@@ -160,6 +235,10 @@ func main() {
 	}
 
 	r := chi.NewRouter()
+
+	if privKey != nil {
+		r.Use(middleware.DecryptMiddleware(privKey))
+	}
 
 	r.Use(middleware.GzipMiddleware)
 	r.Use(middleware.HashRequestMiddleware(*hashKey))
@@ -199,8 +278,29 @@ func main() {
 		log.Println(http.ListenAndServe("localhost:6060", nil)) // pprof endpoint
 	}()
 
-	err := http.ListenAndServe(*address, r)
-	if err != nil {
-		Log.Fatal("Ошибка запуска сервера", zap.Error(err))
+	if listenErr := http.ListenAndServe(*address, r); listenErr != nil {
+		Log.Fatal("Ошибка запуска сервера", zap.Error(listenErr))
 	}
+}
+
+// printBuildInfo выводит информацию о версии сборки в stdout.
+func printBuildInfo() {
+	version := buildVersion
+	if version == "" {
+		version = "N/A"
+	}
+
+	date := buildDate
+	if date == "" {
+		date = "N/A"
+	}
+
+	commit := buildCommit
+	if commit == "" {
+		commit = "N/A"
+	}
+
+	fmt.Printf("Build version: %s\n", version)
+	fmt.Printf("Build date: %s\n", date)
+	fmt.Printf("Build commit: %s\n", commit)
 }

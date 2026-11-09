@@ -86,10 +86,13 @@ func (s *DBStorage) SetGauge(name string, value float64) {
 	query := `INSERT INTO gauges (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`
 
-	withRetry("SetGauge", func() error {
+	err := withRetry("SetGauge", func() error {
 		_, err := s.db.Exec(query, name, value)
 		return err
 	})
+	if err != nil {
+		log.Printf("DBStorage: SetGauge failed after retries: %v", err)
+	}
 }
 
 // IncrementCounter увеличивает значение counter метрики в PostgreSQL.
@@ -98,10 +101,14 @@ func (s *DBStorage) IncrementCounter(name string, delta int64) {
 	query := `INSERT INTO counters (name, value) VALUES ($1, $2)
 	          ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`
 
-	withRetry("IncrementCounter", func() error {
+	err := withRetry("IncrementCounter", func() error {
 		_, err := s.db.Exec(query, name, delta)
 		return err
 	})
+	if err != nil {
+		log.Printf("DBStorage: IncrementCounter failed after retries: %v", err)
+	}
+
 }
 
 // GetGauge возвращает значение gauge метрики из PostgreSQL.
@@ -152,7 +159,11 @@ func (s *DBStorage) GetAllGauges() map[string]float64 {
 		if err != nil {
 			return err
 		}
-		defer rows.Close() // defer снаружи цикла
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil {
+				log.Printf("DBStorage: error closing rows: %v", closeErr)
+			}
+		}()
 
 		result = make(map[string]float64)
 
@@ -190,7 +201,11 @@ func (s *DBStorage) GetAllCounters() map[string]int64 {
 		if err != nil {
 			return err
 		}
-		defer rows.Close() // defer снаружи цикла
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil {
+				log.Printf("DBStorage: error closing rows: %v", closeErr)
+			}
+		}()
 
 		result = make(map[string]int64)
 
@@ -225,6 +240,14 @@ func (s *DBStorage) SetBatch(metrics []model.Metrics) error {
 	})
 }
 
+// rollbackWithError откатывает транзакцию и возвращает оригинальную ошибку.
+func rollbackWithError(tx *sql.Tx, originalErr error) error {
+	if rbErr := tx.Rollback(); rbErr != nil {
+		log.Printf("DBStorage: ошибка отката транзакции: %v (оригинальная ошибка: %v)", rbErr, originalErr)
+	}
+	return originalErr
+}
+
 // executeBatchTransaction выполняет batch-операцию в одной транзакции.
 func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 	tx, err := s.db.Begin()
@@ -235,18 +258,24 @@ func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 	gaugeStmt, err := tx.Prepare(`INSERT INTO gauges (name, value) VALUES ($1, $2)
 	                              ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value`)
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("prepare gauge stmt: %w", err)
+		return rollbackWithError(tx, fmt.Errorf("prepare gauge stmt: %w", err))
 	}
-	defer gaugeStmt.Close()
+	defer func() {
+		if closeErr := gaugeStmt.Close(); closeErr != nil {
+			log.Printf("DBStorage: ошибка закрытия gaugeStmt: %v", closeErr)
+		}
+	}()
 
 	counterStmt, err := tx.Prepare(`INSERT INTO counters (name, value) VALUES ($1, $2)
 	                                ON CONFLICT (name) DO UPDATE SET value = counters.value + EXCLUDED.value`)
 	if err != nil {
-		tx.Rollback()
-		return fmt.Errorf("prepare counter stmt: %w", err)
+		return rollbackWithError(tx, fmt.Errorf("prepare counter stmt: %w", err))
 	}
-	defer counterStmt.Close()
+	defer func() {
+		if closeErr := counterStmt.Close(); closeErr != nil {
+			log.Printf("DBStorage: ошибка закрытия counterStmt: %v", closeErr)
+		}
+	}()
 
 	for _, m := range metrics {
 		switch m.MType {
@@ -255,19 +284,21 @@ func (s *DBStorage) executeBatchTransaction(metrics []model.Metrics) error {
 				continue
 			}
 			if _, err := gaugeStmt.Exec(m.ID, *m.Value); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("exec gauge %s: %w", m.ID, err)
+				return rollbackWithError(tx, fmt.Errorf("exec gauge %s: %w", m.ID, err))
 			}
 		case "counter":
 			if m.Delta == nil {
 				continue
 			}
 			if _, err := counterStmt.Exec(m.ID, *m.Delta); err != nil {
-				tx.Rollback()
-				return fmt.Errorf("exec counter %s: %w", m.ID, err)
+				return rollbackWithError(tx, fmt.Errorf("exec counter %s: %w", m.ID, err))
 			}
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return rollbackWithError(tx, fmt.Errorf("commit transaction: %w", err))
+	}
+
+	return nil
 }
