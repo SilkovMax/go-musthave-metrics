@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"flag"
 	"fmt"
 
@@ -16,10 +19,47 @@ import (
 
 // Глобальные переменные для информации о сборке.
 var (
-	buildVersion string
-	buildDate    string
-	buildCommit  string
+	buildVersion  string
+	buildDate     string
+	buildCommit   string
+	cryptoKeyPath string
 )
+
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
+
+// loadPublicKey загружает и парсит RSA публичный ключ из PEM-файла.
+func loadPublicKey(path string) (*rsa.PublicKey, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	keyData, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read public key file: %w", err)
+	}
+
+	block, _ := pem.Decode(keyData)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block containing public key")
+	}
+
+	pubInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+
+	pubKey, ok := pubInterface.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("public key is not an RSA key")
+	}
+
+	return pubKey, nil
+}
 
 func main() {
 	// Выводим информацию о сборке
@@ -30,6 +70,7 @@ func main() {
 	pollInterval := flag.Int("p", 2, "poll interval in seconds")
 	key := flag.String("k", "", "HMAC key for requests")
 	rateLimit := flag.Int("l", 1, "rate limit (number of workers)")
+	flag.StringVar(&cryptoKeyPath, "crypto-key", getEnv("CRYPTO_KEY", ""), "path to public key file")
 
 	flag.Parse()
 
@@ -80,10 +121,19 @@ func main() {
 		return
 	}
 
+	// Загрузка публичного ключа
+	pubKey, err := loadPublicKey(cryptoKeyPath)
+	if err != nil {
+		fmt.Printf("Ошибка загрузки публичного ключа: %v\n", err)
+		// Не делаем Fatal, чтобы агент мог работать без шифрования, если ключ не указан
+	} else if pubKey != nil {
+		fmt.Println("Публичный ключ успешно загружен. Шифрование включено.")
+	}
+
 	col := agent.NewCollector()
 
 	serverURL := fmt.Sprintf("http://%s", *address)
-	client := agent.NewClient(serverURL, *key)
+	client := agent.NewClient(serverURL, *key, pubKey)
 
 	pollDuration := time.Duration(*pollInterval) * time.Second
 	reportDuration := time.Duration(*reportInterval) * time.Second
@@ -162,6 +212,7 @@ func main() {
 		jobs <- batch
 		fmt.Println("Батч добавлен в очередь")
 	}
+
 }
 
 // printBuildInfo выводит информацию о версии сборки в stdout.
