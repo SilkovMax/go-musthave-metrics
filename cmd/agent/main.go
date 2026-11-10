@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"log"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/agent"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
@@ -22,14 +24,57 @@ var (
 	buildVersion  string
 	buildDate     string
 	buildCommit   string
-	cryptoKeyPath string
 )
 
-func getEnv(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
+// Структура для парсинга JSON-конфига агента.
+type AgentConfigJSON struct {
+	Address        *string `json:"address"`
+	ReportInterval *string `json:"report_interval"`
+	PollInterval   *string `json:"poll_interval"`
+	Key            *string `json:"key"`
+	RateLimit      *int    `json:"rate_limit"`
+	CryptoKey      *string `json:"crypto_key"`
+}
+
+// Проверяет, был ли флаг передан явно
+func isFlagSet(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
+// Приоритет для строк: Флаг > Env > JSON > Default
+func resolveString(flagVal, envName string, jsonVal *string, defaultVal string, flagName string) string {
+	if isFlagSet(flagName) {
+		return flagVal
 	}
-	return fallback
+	if envVal := os.Getenv(envName); envVal != "" {
+		return envVal
+	}
+	if jsonVal != nil {
+		return *jsonVal
+	}
+	return defaultVal
+}
+
+// Приоритет для int: Флаг > Env > JSON > Default
+func resolveInt(flagVal int, envName string, jsonVal *int, defaultVal int, flagName string) int {
+	if isFlagSet(flagName) {
+		return flagVal
+	}
+	if envVal := os.Getenv(envName); envVal != "" {
+		if v, err := strconv.Atoi(envVal); err == nil {
+			return v
+		}
+	}
+	if jsonVal != nil {
+		return *jsonVal
+	}
+	return defaultVal
 }
 
 // loadPublicKey загружает и парсит RSA публичный ключ из PEM-файла.
@@ -65,58 +110,59 @@ func main() {
 	// Выводим информацию о сборке
 	printBuildInfo()
 
-	address := flag.String("a", "localhost:8080", "address and port to run server")
-	reportInterval := flag.Int("r", 10, "report interval in seconds")
-	pollInterval := flag.Int("p", 2, "poll interval in seconds")
-	key := flag.String("k", "", "HMAC key for requests")
-	rateLimit := flag.Int("l", 1, "rate limit (number of workers)")
-	flag.StringVar(&cryptoKeyPath, "crypto-key", getEnv("CRYPTO_KEY", ""), "path to public key file")
+	flagAddress := flag.String("a", "localhost:8080", "address and port to run server")
+	flagReportInterval := flag.String("r", "10s", "report interval (e.g., 10s)")
+	flagPollInterval := flag.String("p", "2s", "poll interval (e.g., 2s)")
+	flagKey := flag.String("k", "", "HMAC key for requests")
+	flagRateLimit := flag.Int("l", 1, "rate limit (number of workers)")
+	flagCryptoKey := flag.String("crypto-key", "", "path to public key file")
+	flagConfig := flag.String("config", "", "path to JSON config file")
 
 	flag.Parse()
 
-	// add Env and check if ""
-	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
-		*address = envAddress
+	// Определяем путь к конфигу (приоритет: Флаг > Env)
+	configPath := ""
+	if isFlagSet("config") {
+		configPath = *flagConfig
+	} else if envConfig := os.Getenv("CONFIG"); envConfig != "" {
+		configPath = envConfig
 	}
 
-	if envRepInterval := os.Getenv("REPORT_INTERVAL"); envRepInterval != "" {
-
-		if val, err := strconv.Atoi(envRepInterval); err == nil {
-			*reportInterval = val
-
-		} else {
-
-			fmt.Println("Некорректное значение переменной , ввели не число")
+	// Загружаем и парсим JSON, если путь указан
+	var jsonCfg AgentConfigJSON
+	if configPath != "" {
+		data, readErr := os.ReadFile(configPath)
+		if readErr != nil {
+			log.Fatalf("Failed to read config file %s: %v", configPath, readErr)
 		}
+		if unmarshalErr := json.Unmarshal(data, &jsonCfg); unmarshalErr != nil {
+			log.Fatalf("Failed to parse config file %s: %v", configPath, unmarshalErr)
 
-	}
-
-	if envPollInterval := os.Getenv("POLL_INTERVAL"); envPollInterval != "" {
-
-		if val, err := strconv.Atoi(envPollInterval); err == nil {
-			*pollInterval = val
-
-		} else {
-
-			fmt.Println("Некорректное значение переменной , ввели не число")
 		}
-
 	}
 
-	if envKey := os.Getenv("KEY"); envKey != "" {
-		*key = envKey
-	}
+	// Применяем приоритеты для всех переменных
+	address := resolveString(*flagAddress, "ADDRESS", jsonCfg.Address, "localhost:8080", "a")
+	reportIntervalStr := resolveString(*flagReportInterval, "REPORT_INTERVAL", jsonCfg.ReportInterval, "10s", "r")
+	pollIntervalStr := resolveString(*flagPollInterval, "POLL_INTERVAL", jsonCfg.PollInterval, "2s", "p")
+	key := resolveString(*flagKey, "KEY", jsonCfg.Key, "", "k")
+	rateLimit := resolveInt(*flagRateLimit, "RATE_LIMIT", jsonCfg.RateLimit, 1, "l")
+	cryptoKeyPath := resolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
 
-	if envRateLimit := os.Getenv("RATE_LIMIT"); envRateLimit != "" {
-		if val, err := strconv.Atoi(envRateLimit); err == nil {
-			*rateLimit = val
-		} else {
-			fmt.Println("Некорректное значение переменной RATE_LIMIT")
-		}
+	// Парсим интервалы из строки в time.Duration
+	reportInterval, err := time.ParseDuration(reportIntervalStr)
+	if err != nil {
+		fmt.Printf("Некорректный формат report_interval: %v\n", err)
+		return
+	}
+	pollInterval, err := time.ParseDuration(pollIntervalStr)
+	if err != nil {
+		fmt.Printf("Некорректный формат poll_interval: %v\n", err)
+		return
 	}
 
 	// Валидация интервалов
-	if *reportInterval <= 0 || *pollInterval <= 0 {
+	if reportInterval <= 0 || pollInterval <= 0 {
 		fmt.Println("Интервалы должны быть больше нуля")
 		return
 	}
@@ -132,18 +178,18 @@ func main() {
 
 	col := agent.NewCollector()
 
-	serverURL := fmt.Sprintf("http://%s", *address)
-	client := agent.NewClient(serverURL, *key, pubKey)
+	serverURL := fmt.Sprintf("http://%s", address)
+	client := agent.NewClient(serverURL, key, pubKey)
 
-	pollDuration := time.Duration(*pollInterval) * time.Second
-	reportDuration := time.Duration(*reportInterval) * time.Second
+	pollDuration := pollInterval
+	reportDuration := reportInterval
 
 	// буферизованный в 100 штук, не нашел в задании сколько нужно
 	jobs := make(chan []model.Metrics, 100)
 
 	var wg sync.WaitGroup
 
-	for i := 1; i <= *rateLimit; i++ {
+	for i := 1; i <= rateLimit; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
@@ -182,8 +228,8 @@ func main() {
 	reportTicker := time.NewTicker(reportDuration)
 	defer reportTicker.Stop()
 
-	fmt.Printf("Агент запущен. Сервер: %s, poll: %ds, report: %ds, workers: %d\n",
-		*address, *pollInterval, *reportInterval, *rateLimit)
+	fmt.Printf("Агент запущен. Сервер: %s, poll: %v, report: %v, workers: %d\n",
+		address, pollInterval, reportInterval, rateLimit)
 
 	for {
 		<-reportTicker.C
