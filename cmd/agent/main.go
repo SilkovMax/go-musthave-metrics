@@ -1,17 +1,20 @@
 package main
 
 import (
+	"context"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"os/signal"
+	"syscall"
 
+	"log"
 	"strconv"
 	"sync"
 	"time"
-	"log"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/agent"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
@@ -21,9 +24,9 @@ import (
 
 // Глобальные переменные для информации о сборке.
 var (
-	buildVersion  string
-	buildDate     string
-	buildCommit   string
+	buildVersion string
+	buildDate    string
+	buildCommit  string
 )
 
 // Структура для парсинга JSON-конфига агента.
@@ -176,6 +179,14 @@ func main() {
 		fmt.Println("Публичный ключ успешно загружен. Шифрование включено.")
 	}
 
+	// Создаём контекст, который отменится при получении сигнала
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt,    // SIGINT (Ctrl+C)
+		syscall.SIGTERM, // SIGTERM
+		syscall.SIGQUIT, // SIGQUIT
+	)
+	defer stop() // Освобождаем ресурсы при выходе
+
 	col := agent.NewCollector()
 
 	serverURL := fmt.Sprintf("http://%s", address)
@@ -209,9 +220,13 @@ func main() {
 		ticker := time.NewTicker(pollDuration)
 		defer ticker.Stop()
 		for {
-			<-ticker.C
-			col.Update()
-			fmt.Println("Метрики обновлены (runtime)")
+			select {
+			case <-ctx.Done():
+				fmt.Println("Poll-горутина (runtime) остановлена")
+				return
+			case <-ticker.C:
+				col.Update()
+			}
 		}
 	}()
 
@@ -219,12 +234,17 @@ func main() {
 		ticker := time.NewTicker(pollDuration)
 		defer ticker.Stop()
 		for {
-			<-ticker.C
-			col.UpdateGopsutil()
-			fmt.Println("Метрики обновлены (gopsutil)")
+			select {
+			case <-ctx.Done(): // Слушаем сигнал завершения
+				fmt.Println("Poll-горутина (gopsutil) остановлена")
+				return
+			case <-ticker.C:
+				col.UpdateGopsutil()
+			}
 		}
 	}()
 
+	// 🔄 ЗАМЕНИТЬ нижнюю часть main() на этот блок:
 	reportTicker := time.NewTicker(reportDuration)
 	defer reportTicker.Stop()
 
@@ -232,33 +252,60 @@ func main() {
 		address, pollInterval, reportInterval, rateLimit)
 
 	for {
-		<-reportTicker.C
-		fmt.Println("Отправка метрик на сервер (batch)")
+		select {
+		case <-ctx.Done(): // 1. Если пришёл сигнал завершения (Ctrl+C, kill)
+			fmt.Println("\nПолучен сигнал завершения. Начинаем graceful shutdown")
 
-		var batch []model.Metrics
+			// Закрываем канал. Воркеры, читающие из него, поймут, что новых задач не будет
+			close(jobs)
 
-		for name, value := range col.GetGauges() {
-			v := value
-			batch = append(batch, model.Metrics{
-				ID:    name,
-				MType: model.Gauge,
-				Value: &v,
-			})
+			// Ждём, пока все воркеры закончат отправку текущих данных
+			fmt.Println("Ожидаем завершения отправки оставшихся метрик")
+			wg.Wait()
+
+			fmt.Println("Агент корректно завершил работу. Все данные отправлены.")
+			return // Выходим из main(), программа завершается
+
+		case <-reportTicker.C: // 2. Если пришло время плановой отправки
+			fmt.Println("Отправка метрик на сервер (batch)")
+
+			var batch []model.Metrics
+
+			for name, value := range col.GetGauges() {
+				v := value
+				batch = append(batch, model.Metrics{
+					ID:    name,
+					MType: model.Gauge,
+					Value: &v,
+				})
+			}
+
+			for name, value := range col.GetCounters() {
+				v := value
+				batch = append(batch, model.Metrics{
+					ID:    name,
+					MType: model.Counter,
+					Delta: &v,
+				})
+			}
+
+			// Используем select, чтобы не заблокироваться, если сигнал придёт прямо сейчас
+			select {
+			case jobs <- batch:
+				fmt.Println("Батч добавлен в очередь")
+			case <-ctx.Done():
+				// Если сигнал пришёл в этот момент, отправляем последний батч синхронно
+				fmt.Println("Сигнал получен во время формирования батча. Отправляем синхронно...")
+				if err := client.SendBatch(batch); err != nil {
+					fmt.Printf("Ошибка отправки последнего батча: %v\n", err)
+				}
+				close(jobs)
+				wg.Wait()
+				fmt.Println("Агент корректно завершил работу.")
+				return
+			}
 		}
-
-		for name, value := range col.GetCounters() {
-			v := value
-			batch = append(batch, model.Metrics{
-				ID:    name,
-				MType: model.Counter,
-				Delta: &v,
-			})
-		}
-
-		jobs <- batch
-		fmt.Println("Батч добавлен в очередь")
 	}
-
 }
 
 // printBuildInfo выводит информацию о версии сборки в stdout.

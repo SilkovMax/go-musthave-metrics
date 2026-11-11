@@ -3,10 +3,13 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -151,11 +154,11 @@ func (c *Client) SendMetric(m model.Metrics) error {
 	// 3. Шифруем сжатые данные, если есть публичный ключ
 	var payloadToSend []byte
 	if c.pubKey != nil {
-		encryptedData, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, c.pubKey, compressedData, nil)
+		encryptedPayload, err := c.encryptPayload(compressedData)
 		if err != nil {
-			return fmt.Errorf("failed to encrypt payload: %w", err)
+			return fmt.Errorf("failed to encrypt metric: %w", err)
 		}
-		payloadToSend = encryptedData
+		payloadToSend = encryptedPayload
 	} else {
 		payloadToSend = compressedData
 	}
@@ -204,14 +207,14 @@ func (c *Client) SendBatch(metrics []model.Metrics) error {
 	}
 	compressedData := buf.Bytes()
 
-	// 3. Шифрование
+	// 3. Шифрование через гибридный метод
 	var payloadToSend []byte
 	if c.pubKey != nil {
-		encryptedData, err := rsa.EncryptOAEP(sha256.New(), rand.Reader, c.pubKey, compressedData, nil)
+		encryptedPayload, err := c.encryptPayload(compressedData) // 🔄 ВЫЗЫВАЕМ НОВЫЙ МЕТОД
 		if err != nil {
-			return fmt.Errorf("failed to encrypt batch payload: %w", err)
+			return fmt.Errorf("failed to encrypt batch: %w", err)
 		}
-		payloadToSend = encryptedData
+		payloadToSend = encryptedPayload
 	} else {
 		payloadToSend = compressedData
 	}
@@ -229,4 +232,54 @@ func (c *Client) SendBatch(metrics []model.Metrics) error {
 
 		return req.Post(c.baseURL + "/updates/")
 	})
+}
+
+// Envelope используется для гибридного шифрования (AES + RSA)
+type Envelope struct {
+	EncryptedKey  string `json:"encrypted_key"`
+	EncryptedData string `json:"encrypted_data"`
+}
+
+// encryptPayload реализует гибридное шифрование: шифрует данные через AES-GCM, а сам AES-ключ шифрует через RSA-OAEP.
+func (c *Client) encryptPayload(data []byte) ([]byte, error) {
+	// 1. Генерируем случайный AES-ключ (32 байта = 256 бит)
+	aesKey := make([]byte, 32)
+	if _, genErr := rand.Read(aesKey); genErr != nil {
+		return nil, fmt.Errorf("failed to generate AES key: %w", genErr)
+	}
+
+	// 2. Создаём AES-шифр
+	block, cipherErr := aes.NewCipher(aesKey)
+	if cipherErr != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", cipherErr)
+	}
+
+	// 3. Используем режим AES-GCM (Authenticated Encryption)
+	aesGCM, gcmErr := cipher.NewGCM(block)
+	if gcmErr != nil {
+		return nil, fmt.Errorf("failed to create AES-GCM: %w", gcmErr)
+	}
+
+	// 4. Генерируем уникальный nonce (вектор инициализации)
+	nonce := make([]byte, aesGCM.NonceSize())
+	if _, nonceErr := rand.Read(nonce); nonceErr != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", nonceErr)
+	}
+
+	// 5. Шифруем данные (метод Seal автоматически добавляет nonce в начало результата)
+	encryptedData := aesGCM.Seal(nonce, nonce, data, nil)
+
+	// 6. Шифруем сам AES-ключ через RSA-OAEP
+	encryptedKey, rsaErr := rsa.EncryptOAEP(sha256.New(), rand.Reader, c.pubKey, aesKey, nil)
+	if rsaErr != nil {
+		return nil, fmt.Errorf("failed to encrypt AES key with RSA: %w", rsaErr)
+	}
+
+	// 7. Упаковываем всё в JSON-конверт и кодируем в base64
+	envelope := Envelope{
+		EncryptedKey:  base64.StdEncoding.EncodeToString(encryptedKey),
+		EncryptedData: base64.StdEncoding.EncodeToString(encryptedData),
+	}
+
+	return json.Marshal(envelope)
 }

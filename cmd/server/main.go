@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rsa"
 	"crypto/x509"
 	"database/sql"
@@ -12,7 +13,9 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -28,9 +31,9 @@ import (
 // Глобальные переменные для информации о сборке.
 // Их значения подменяются на этапе линковки через флаг -ldflags "-X main.buildVersion=..."
 var (
-	buildVersion  string
-	buildDate     string
-	buildCommit   string
+	buildVersion string
+	buildDate    string
+	buildCommit  string
 )
 
 var Log *zap.Logger = zap.NewNop()
@@ -232,16 +235,11 @@ func main() {
 		if dbErr != nil {
 			Log.Fatal("Ошибка подключения к базе данных", zap.Error(dbErr))
 		}
-		defer func() {
-			if closeErr := sqlDB.Close(); closeErr != nil {
-				Log.Error("Ошибка закрытия БД", zap.Error(closeErr))
-			}
-		}()
 		storage = repository.NewDBStorage(sqlDB)
 		Log.Info("Успешно подключено к PostgreSQL")
 	} else {
 
-	memStorage := repository.NewMemStorage(fileStoragePath, storeInterval, restore)
+		memStorage := repository.NewMemStorage(fileStoragePath, storeInterval, restore)
 
 		storage = memStorage
 		defer memStorage.Stop()
@@ -272,8 +270,6 @@ func main() {
 			Log.Info("HTTPObserver добавлен", zap.String("url", auditURL))
 		}
 
-		// Откладываем остановку менеджера
-		defer auditManager.Stop()
 	}
 
 	r := chi.NewRouter()
@@ -316,13 +312,72 @@ func main() {
 
 	Log.Info("Сервер запущен", zap.String("address", address))
 
+	// Создаём контекст с сигналами завершения
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+	)
+	defer stop()
+
+	// pprof запускаем как раньше
 	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil)) // pprof endpoint
+		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
-	if listenErr := http.ListenAndServe(address, r); listenErr != nil {
-		Log.Fatal("Ошибка запуска сервера", zap.Error(listenErr))
+	// Создаём http.Server вместо прямого вызова ListenAndServe
+	srv := &http.Server{
+		Addr:    address,
+		Handler: r,
 	}
+
+	// Запускаем сервер в горутине
+	go func() {
+		Log.Info("Сервер запущен", zap.String("address", address))
+		if serveErr := srv.ListenAndServe(); serveErr != nil && serveErr != http.ErrServerClosed {
+			Log.Fatal("Ошибка запуска сервера", zap.Error(serveErr))
+		}
+	}()
+
+	// Блокируемся, пока не придёт сигнал
+	<-ctx.Done()
+	Log.Info("Получен сигнал завершения. Начинаем graceful shutdown...")
+
+	// Создаём контекст с таймаутом для завершения (даём 10 секунд)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Graceful shutdown HTTP-сервера (дождётся завершения текущих запросов)
+	if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil {
+		Log.Error("Ошибка при завершении сервера", zap.Error(shutdownErr))
+	}
+
+	// Сохраняем несохранённые данные
+	Log.Info("Сохраняем несохранённые данные...")
+	if memStorage, ok := storage.(*repository.MemStorage); ok {
+		if flushErr := memStorage.SaveToFile(); flushErr != nil {
+			Log.Error("Ошибка сохранения данных в файл", zap.Error(flushErr))
+		} else {
+			Log.Info("Данные успешно сохранены")
+		}
+	}
+
+	// Останавливаем Audit Manager (если он создан)
+	if auditManager != nil {
+		auditManager.Stop()
+		Log.Info("Audit Manager остановлен")
+	}
+
+	// Закрываем соединение с БД (если используется)
+	if sqlDB != nil {
+		if closeErr := sqlDB.Close(); closeErr != nil {
+			Log.Error("Ошибка закрытия БД", zap.Error(closeErr))
+		} else {
+			Log.Info("Соединение с БД закрыто")
+		}
+	}
+
+	Log.Info("Сервер корректно завершил работу")
 }
 
 // printBuildInfo выводит информацию о версии сборки в stdout.
