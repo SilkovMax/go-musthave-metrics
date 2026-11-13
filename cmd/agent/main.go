@@ -1,93 +1,171 @@
 package main
 
 import (
+	"context"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
+	"os/signal"
+	"syscall"
 
-	"strconv"
-	"sync"
+	"log"
 	"time"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/agent"
+	"github.com/SilkovMax/go-musthave-metrics/internal/config"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
-
 	"os"
+
+	"golang.org/x/sync/errgroup"
 )
 
-func main() {
+// Глобальные переменные для информации о сборке.
+var (
+	buildVersion string
+	buildDate    string
+	buildCommit  string
+)
 
-	address := flag.String("a", "localhost:8080", "address and port to run server")
-	reportInterval := flag.Int("r", 10, "report interval in seconds")
-	pollInterval := flag.Int("p", 2, "poll interval in seconds")
-	key := flag.String("k", "", "HMAC key for requests")
-	rateLimit := flag.Int("l", 1, "rate limit (number of workers)")
+// Структура для парсинга JSON-конфига агента.
+type AgentConfigJSON struct {
+	Address        *string `json:"address"`
+	ReportInterval *string `json:"report_interval"`
+	PollInterval   *string `json:"poll_interval"`
+	Key            *string `json:"key"`
+	RateLimit      *int    `json:"rate_limit"`
+	CryptoKey      *string `json:"crypto_key"`
+}
+
+// loadPublicKey загружает и парсит RSA публичный ключ из PEM-файла.
+func loadPublicKey(path string) (*rsa.PublicKey, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	keyData, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read public key file: %w", err)
+	}
+
+	block, _ := pem.Decode(keyData)
+	if block == nil {
+		return nil, fmt.Errorf("failed to decode PEM block containing public key")
+	}
+
+	pubInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+
+	pubKey, ok := pubInterface.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("public key is not an RSA key")
+	}
+
+	return pubKey, nil
+}
+
+func main() {
+	// Выводим информацию о сборке
+	printBuildInfo()
+
+	flagAddress := flag.String("a", "localhost:8080", "address and port to run server")
+	flagReportInterval := flag.String("r", "10s", "report interval (e.g., 10s)")
+	flagPollInterval := flag.String("p", "2s", "poll interval (e.g., 2s)")
+	flagKey := flag.String("k", "", "HMAC key for requests")
+	flagRateLimit := flag.Int("l", 1, "rate limit (number of workers)")
+	flagCryptoKey := flag.String("crypto-key", "", "path to public key file")
+
+	var flagConfig string
+	flag.StringVar(&flagConfig, "config", "", "path to JSON config file")
+	flag.StringVar(&flagConfig, "c", "", "path to JSON config file -c")
 
 	flag.Parse()
 
-	// add Env and check if ""
-	if envAddress := os.Getenv("ADDRESS"); envAddress != "" {
-		*address = envAddress
+	// Определяем путь к конфигу (приоритет: Флаг > Env)
+	configPath := ""
+	if config.IsFlagSet("config") || config.IsFlagSet("c") {
+		configPath = flagConfig
+	} else if envConfig := os.Getenv("CONFIG"); envConfig != "" {
+		configPath = envConfig
 	}
 
-	if envRepInterval := os.Getenv("REPORT_INTERVAL"); envRepInterval != "" {
-
-		if val, err := strconv.Atoi(envRepInterval); err == nil {
-			*reportInterval = val
-
-		} else {
-
-			fmt.Println("Некорректное значение переменной , ввели не число")
+	// Загружаем и парсим JSON, если путь указан
+	var jsonCfg AgentConfigJSON
+	if configPath != "" {
+		data, readErr := os.ReadFile(configPath)
+		if readErr != nil {
+			log.Fatalf("Failed to read config file %s: %v", configPath, readErr)
 		}
+		if unmarshalErr := json.Unmarshal(data, &jsonCfg); unmarshalErr != nil {
+			log.Fatalf("Failed to parse config file %s: %v", configPath, unmarshalErr)
 
-	}
-
-	if envPollInterval := os.Getenv("POLL_INTERVAL"); envPollInterval != "" {
-
-		if val, err := strconv.Atoi(envPollInterval); err == nil {
-			*pollInterval = val
-
-		} else {
-
-			fmt.Println("Некорректное значение переменной , ввели не число")
 		}
-
 	}
 
-	if envKey := os.Getenv("KEY"); envKey != "" {
-		*key = envKey
-	}
+	// Применяем приоритеты для всех переменных
+	address := config.ResolveString(*flagAddress, "ADDRESS", jsonCfg.Address, "localhost:8080", "a")
+	reportIntervalStr := config.ResolveString(*flagReportInterval, "REPORT_INTERVAL", jsonCfg.ReportInterval, "10s", "r")
+	pollIntervalStr := config.ResolveString(*flagPollInterval, "POLL_INTERVAL", jsonCfg.PollInterval, "2s", "p")
+	key := config.ResolveString(*flagKey, "KEY", jsonCfg.Key, "", "k")
+	rateLimit := config.ResolveInt(*flagRateLimit, "RATE_LIMIT", jsonCfg.RateLimit, 1, "l")
+	cryptoKeyPath := config.ResolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
 
-	if envRateLimit := os.Getenv("RATE_LIMIT"); envRateLimit != "" {
-		if val, err := strconv.Atoi(envRateLimit); err == nil {
-			*rateLimit = val
-		} else {
-			fmt.Println("Некорректное значение переменной RATE_LIMIT")
-		}
+	// Парсим интервалы из строки в time.Duration
+	reportInterval, err := time.ParseDuration(reportIntervalStr)
+	if err != nil {
+		fmt.Printf("Некорректный формат report_interval: %v\n", err)
+		return
+	}
+	pollInterval, err := time.ParseDuration(pollIntervalStr)
+	if err != nil {
+		fmt.Printf("Некорректный формат poll_interval: %v\n", err)
+		return
 	}
 
 	// Валидация интервалов
-	if *reportInterval <= 0 || *pollInterval <= 0 {
+	if reportInterval <= 0 || pollInterval <= 0 {
 		fmt.Println("Интервалы должны быть больше нуля")
 		return
 	}
 
+	// Загрузка публичного ключа
+	pubKey, err := loadPublicKey(cryptoKeyPath)
+	if err != nil {
+		//Если путь к ключу задан, но загрузка не удалась, должны завершить работу
+		log.Fatalf("Ошибка загрузки публичного ключа: %v\n", err)
+	} else if pubKey != nil {
+		fmt.Println("Публичный ключ успешно загружен. Шифрование включено.")
+	}
+
+	// Создаём контекст, который отменится при получении сигнала
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt,    // SIGINT (Ctrl+C)
+		syscall.SIGTERM, // SIGTERM
+		syscall.SIGQUIT, // SIGQUIT
+	)
+	defer stop() // Освобождаем ресурсы при выходе
+
 	col := agent.NewCollector()
 
-	serverURL := fmt.Sprintf("http://%s", *address)
-	client := agent.NewClient(serverURL, *key)
+	serverURL := fmt.Sprintf("http://%s", address)
+	client := agent.NewClient(serverURL, key, pubKey)
 
-	pollDuration := time.Duration(*pollInterval) * time.Second
-	reportDuration := time.Duration(*reportInterval) * time.Second
+	pollDuration := pollInterval
+	reportDuration := reportInterval
 
 	// буферизованный в 100 штук, не нашел в задании сколько нужно
 	jobs := make(chan []model.Metrics, 100)
 
-	var wg sync.WaitGroup
+	// Создаем errgroup, привязанный к контексту сигналов
+	g, _ := errgroup.WithContext(ctx)
 
-	for i := 1; i <= *rateLimit; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
+	for i := 1; i <= rateLimit; i++ {
+		workerID := i
+		g.Go(func() error {
 			// Воркер читает батчи из канала и отправляет их
 			for batch := range jobs {
 				if err := client.SendBatch(batch); err != nil {
@@ -97,16 +175,21 @@ func main() {
 				}
 			}
 			fmt.Printf("[Worker %d] Завершён\n", workerID)
-		}(i)
+			return nil
+		})
 	}
 
 	go func() {
 		ticker := time.NewTicker(pollDuration)
 		defer ticker.Stop()
 		for {
-			<-ticker.C
-			col.Update()
-			fmt.Println("Метрики обновлены (runtime)")
+			select {
+			case <-ctx.Done():
+				fmt.Println("Poll-горутина (runtime) остановлена")
+				return
+			case <-ticker.C:
+				col.Update()
+			}
 		}
 	}()
 
@@ -114,43 +197,101 @@ func main() {
 		ticker := time.NewTicker(pollDuration)
 		defer ticker.Stop()
 		for {
-			<-ticker.C
-			col.UpdateGopsutil()
-			fmt.Println("Метрики обновлены (gopsutil)")
+			select {
+			case <-ctx.Done(): // Слушаем сигнал завершения
+				fmt.Println("Poll-горутина (gopsutil) остановлена")
+				return
+			case <-ticker.C:
+				col.UpdateGopsutil()
+			}
 		}
 	}()
 
 	reportTicker := time.NewTicker(reportDuration)
 	defer reportTicker.Stop()
 
-	fmt.Printf("Агент запущен. Сервер: %s, poll: %ds, report: %ds, workers: %d\n",
-		*address, *pollInterval, *reportInterval, *rateLimit)
+	fmt.Printf("Агент запущен. Сервер: %s, poll: %v, report: %v, workers: %d\n",
+		address, pollInterval, reportInterval, rateLimit)
 
 	for {
-		<-reportTicker.C
-		fmt.Println("Отправка метрик на сервер (batch)")
+		select {
+		case <-ctx.Done(): // 1. Если пришёл сигнал завершения (Ctrl+C, kill)
+			fmt.Println("\nПолучен сигнал завершения. Начинаем graceful shutdown")
 
-		var batch []model.Metrics
+			// Закрываем канал. Воркеры, читающие из него, поймут, что новых задач не будет
+			close(jobs)
 
-		for name, value := range col.GetGauges() {
-			v := value
-			batch = append(batch, model.Metrics{
-				ID:    name,
-				MType: model.Gauge,
-				Value: &v,
-			})
+			// Ждём, пока все воркеры закончат отправку текущих данных
+			fmt.Println("Ожидаем завершения отправки оставшихся метрик")
+			if err := g.Wait(); err != nil {
+				fmt.Printf("Ошибка при завершении воркеров: %v\n", err)
+			}
+
+			fmt.Println("Агент корректно завершил работу. Все данные отправлены.")
+			return // Выходим из main(), программа завершается
+
+		case <-reportTicker.C: // 2. Если пришло время плановой отправки
+			fmt.Println("Отправка метрик на сервер (batch)")
+
+			var batch []model.Metrics
+
+			for name, value := range col.GetGauges() {
+				v := value
+				batch = append(batch, model.Metrics{
+					ID:    name,
+					MType: model.Gauge,
+					Value: &v,
+				})
+			}
+
+			for name, value := range col.GetCounters() {
+				v := value
+				batch = append(batch, model.Metrics{
+					ID:    name,
+					MType: model.Counter,
+					Delta: &v,
+				})
+			}
+
+			// Используем select, чтобы не заблокироваться, если сигнал придёт прямо сейчас
+			select {
+			case jobs <- batch:
+				fmt.Println("Батч добавлен в очередь")
+			case <-ctx.Done():
+				// Если сигнал пришёл в этот момент, отправляем последний батч синхронно
+				fmt.Println("Сигнал получен во время формирования батча. Отправляем синхронно...")
+				if err := client.SendBatch(batch); err != nil {
+					fmt.Printf("Ошибка отправки последнего батча: %v\n", err)
+				}
+				close(jobs)
+				if err := g.Wait(); err != nil {
+					fmt.Printf("Ошибка при завершении воркеров: %v\n", err)
+				}
+				fmt.Println("Агент корректно завершил работу.")
+				return
+			}
 		}
-
-		for name, value := range col.GetCounters() {
-			v := value
-			batch = append(batch, model.Metrics{
-				ID:    name,
-				MType: model.Counter,
-				Delta: &v,
-			})
-		}
-
-		jobs <- batch
-		fmt.Println("Батч добавлен в очередь")
 	}
+}
+
+// printBuildInfo выводит информацию о версии сборки в stdout.
+func printBuildInfo() {
+	version := buildVersion
+	if version == "" {
+		version = "N/A"
+	}
+
+	date := buildDate
+	if date == "" {
+		date = "N/A"
+	}
+
+	commit := buildCommit
+	if commit == "" {
+		commit = "N/A"
+	}
+
+	fmt.Printf("Build version: %s\n", version)
+	fmt.Printf("Build date: %s\n", date)
+	fmt.Printf("Build commit: %s\n", commit)
 }
