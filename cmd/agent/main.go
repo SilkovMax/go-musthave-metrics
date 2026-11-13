@@ -12,14 +12,14 @@ import (
 	"syscall"
 
 	"log"
-	"strconv"
-	"sync"
 	"time"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/agent"
+	"github.com/SilkovMax/go-musthave-metrics/internal/config"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
-
 	"os"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // Глобальные переменные для информации о сборке.
@@ -37,47 +37,6 @@ type AgentConfigJSON struct {
 	Key            *string `json:"key"`
 	RateLimit      *int    `json:"rate_limit"`
 	CryptoKey      *string `json:"crypto_key"`
-}
-
-// Проверяет, был ли флаг передан явно
-func isFlagSet(name string) bool {
-	found := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == name {
-			found = true
-		}
-	})
-	return found
-}
-
-// Приоритет для строк: Флаг > Env > JSON > Default
-func resolveString(flagVal, envName string, jsonVal *string, defaultVal string, flagName string) string {
-	if isFlagSet(flagName) {
-		return flagVal
-	}
-	if envVal := os.Getenv(envName); envVal != "" {
-		return envVal
-	}
-	if jsonVal != nil {
-		return *jsonVal
-	}
-	return defaultVal
-}
-
-// Приоритет для int: Флаг > Env > JSON > Default
-func resolveInt(flagVal int, envName string, jsonVal *int, defaultVal int, flagName string) int {
-	if isFlagSet(flagName) {
-		return flagVal
-	}
-	if envVal := os.Getenv(envName); envVal != "" {
-		if v, err := strconv.Atoi(envVal); err == nil {
-			return v
-		}
-	}
-	if jsonVal != nil {
-		return *jsonVal
-	}
-	return defaultVal
 }
 
 // loadPublicKey загружает и парсит RSA публичный ключ из PEM-файла.
@@ -119,14 +78,17 @@ func main() {
 	flagKey := flag.String("k", "", "HMAC key for requests")
 	flagRateLimit := flag.Int("l", 1, "rate limit (number of workers)")
 	flagCryptoKey := flag.String("crypto-key", "", "path to public key file")
-	flagConfig := flag.String("config", "", "path to JSON config file")
+
+	var flagConfig string
+	flag.StringVar(&flagConfig, "config", "", "path to JSON config file")
+	flag.StringVar(&flagConfig, "c", "", "path to JSON config file -c")
 
 	flag.Parse()
 
 	// Определяем путь к конфигу (приоритет: Флаг > Env)
 	configPath := ""
-	if isFlagSet("config") {
-		configPath = *flagConfig
+	if config.IsFlagSet("config") || config.IsFlagSet("c") {
+		configPath = flagConfig
 	} else if envConfig := os.Getenv("CONFIG"); envConfig != "" {
 		configPath = envConfig
 	}
@@ -145,12 +107,12 @@ func main() {
 	}
 
 	// Применяем приоритеты для всех переменных
-	address := resolveString(*flagAddress, "ADDRESS", jsonCfg.Address, "localhost:8080", "a")
-	reportIntervalStr := resolveString(*flagReportInterval, "REPORT_INTERVAL", jsonCfg.ReportInterval, "10s", "r")
-	pollIntervalStr := resolveString(*flagPollInterval, "POLL_INTERVAL", jsonCfg.PollInterval, "2s", "p")
-	key := resolveString(*flagKey, "KEY", jsonCfg.Key, "", "k")
-	rateLimit := resolveInt(*flagRateLimit, "RATE_LIMIT", jsonCfg.RateLimit, 1, "l")
-	cryptoKeyPath := resolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
+	address := config.ResolveString(*flagAddress, "ADDRESS", jsonCfg.Address, "localhost:8080", "a")
+	reportIntervalStr := config.ResolveString(*flagReportInterval, "REPORT_INTERVAL", jsonCfg.ReportInterval, "10s", "r")
+	pollIntervalStr := config.ResolveString(*flagPollInterval, "POLL_INTERVAL", jsonCfg.PollInterval, "2s", "p")
+	key := config.ResolveString(*flagKey, "KEY", jsonCfg.Key, "", "k")
+	rateLimit := config.ResolveInt(*flagRateLimit, "RATE_LIMIT", jsonCfg.RateLimit, 1, "l")
+	cryptoKeyPath := config.ResolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
 
 	// Парсим интервалы из строки в time.Duration
 	reportInterval, err := time.ParseDuration(reportIntervalStr)
@@ -173,8 +135,8 @@ func main() {
 	// Загрузка публичного ключа
 	pubKey, err := loadPublicKey(cryptoKeyPath)
 	if err != nil {
-		fmt.Printf("Ошибка загрузки публичного ключа: %v\n", err)
-		// Не делаем Fatal, чтобы агент мог работать без шифрования, если ключ не указан
+		//Если путь к ключу задан, но загрузка не удалась, должны завершить работу
+		log.Fatalf("Ошибка загрузки публичного ключа: %v\n", err)
 	} else if pubKey != nil {
 		fmt.Println("Публичный ключ успешно загружен. Шифрование включено.")
 	}
@@ -198,12 +160,12 @@ func main() {
 	// буферизованный в 100 штук, не нашел в задании сколько нужно
 	jobs := make(chan []model.Metrics, 100)
 
-	var wg sync.WaitGroup
+	// Создаем errgroup, привязанный к контексту сигналов
+	g, _ := errgroup.WithContext(ctx)
 
 	for i := 1; i <= rateLimit; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
+		workerID := i
+		g.Go(func() error {
 			// Воркер читает батчи из канала и отправляет их
 			for batch := range jobs {
 				if err := client.SendBatch(batch); err != nil {
@@ -213,7 +175,8 @@ func main() {
 				}
 			}
 			fmt.Printf("[Worker %d] Завершён\n", workerID)
-		}(i)
+			return nil
+		})
 	}
 
 	go func() {
@@ -244,7 +207,6 @@ func main() {
 		}
 	}()
 
-	// 🔄 ЗАМЕНИТЬ нижнюю часть main() на этот блок:
 	reportTicker := time.NewTicker(reportDuration)
 	defer reportTicker.Stop()
 
@@ -261,7 +223,9 @@ func main() {
 
 			// Ждём, пока все воркеры закончат отправку текущих данных
 			fmt.Println("Ожидаем завершения отправки оставшихся метрик")
-			wg.Wait()
+			if err := g.Wait(); err != nil {
+				fmt.Printf("Ошибка при завершении воркеров: %v\n", err)
+			}
 
 			fmt.Println("Агент корректно завершил работу. Все данные отправлены.")
 			return // Выходим из main(), программа завершается
@@ -300,7 +264,9 @@ func main() {
 					fmt.Printf("Ошибка отправки последнего батча: %v\n", err)
 				}
 				close(jobs)
-				wg.Wait()
+				if err := g.Wait(); err != nil {
+					fmt.Printf("Ошибка при завершении воркеров: %v\n", err)
+				}
 				fmt.Println("Агент корректно завершил работу.")
 				return
 			}

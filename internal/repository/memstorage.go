@@ -23,9 +23,6 @@ type MemStorage struct {
 	mu       sync.RWMutex
 	gauges   map[string]float64
 	counters map[string]int64
-	//gaugeBuf   []float64
-	//counterBuf []int64
-
 	filepath string
 	interval time.Duration
 	stopCh   chan struct{}

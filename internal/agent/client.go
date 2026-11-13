@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-resty/resty/v2"
 
+	"github.com/SilkovMax/go-musthave-metrics/internal/crypto"
 	"github.com/SilkovMax/go-musthave-metrics/internal/model"
 )
 
@@ -234,12 +235,6 @@ func (c *Client) SendBatch(metrics []model.Metrics) error {
 	})
 }
 
-// Envelope используется для гибридного шифрования (AES + RSA)
-type Envelope struct {
-	EncryptedKey  string `json:"encrypted_key"`
-	EncryptedData string `json:"encrypted_data"`
-}
-
 // encryptPayload реализует гибридное шифрование: шифрует данные через AES-GCM, а сам AES-ключ шифрует через RSA-OAEP.
 func (c *Client) encryptPayload(data []byte) ([]byte, error) {
 	// 1. Генерируем случайный AES-ключ (32 байта = 256 бит)
@@ -276,7 +271,7 @@ func (c *Client) encryptPayload(data []byte) ([]byte, error) {
 	}
 
 	// 7. Упаковываем всё в JSON-конверт и кодируем в base64
-	envelope := Envelope{
+	envelope := crypto.Envelope{
 		EncryptedKey:  base64.StdEncoding.EncodeToString(encryptedKey),
 		EncryptedData: base64.StdEncoding.EncodeToString(encryptedData),
 	}

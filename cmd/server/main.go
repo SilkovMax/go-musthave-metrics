@@ -14,7 +14,6 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -22,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
+	"github.com/SilkovMax/go-musthave-metrics/internal/config"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
@@ -50,47 +50,6 @@ type ServerConfigJSON struct {
 	CryptoKey       *string `json:"crypto_key"`
 	AuditFile       *string `json:"audit_file"`
 	AuditURL        *string `json:"audit_url"`
-}
-
-// isFlagSet проверяет, был ли флаг передан явно в командной строке.
-func isFlagSet(name string) bool {
-	found := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == name {
-			found = true
-		}
-	})
-	return found
-}
-
-// resolveString возвращает значение по приоритету: Флаг > Env > JSON > Default
-func resolveString(flagVal, envName string, jsonVal *string, defaultVal string, flagName string) string {
-	if isFlagSet(flagName) {
-		return flagVal
-	}
-	if envVal := os.Getenv(envName); envVal != "" {
-		return envVal
-	}
-	if jsonVal != nil {
-		return *jsonVal
-	}
-	return defaultVal
-}
-
-// resolveString возвращает значение по приоритету: Флаг > Env > JSON > Default
-func resolveBool(flagVal bool, envName string, jsonVal *bool, defaultVal bool, flagName string) bool {
-	if isFlagSet(flagName) {
-		return flagVal
-	}
-	if envVal := os.Getenv(envName); envVal != "" {
-		if v, err := strconv.ParseBool(envVal); err == nil {
-			return v
-		}
-	}
-	if jsonVal != nil {
-		return *jsonVal
-	}
-	return defaultVal
 }
 
 // loadPrivateKey загружает и парсит RSA приватный ключ из PEM-файла.
@@ -164,14 +123,16 @@ func main() {
 	flagDatabaseDSN := flag.String("d", "", "connect to DB")
 	flagHashKey := flag.String("k", "", "HMAC key for signing requests")
 	flagCryptoKey := flag.String("crypto-key", "", "path to private key file")
-	flagConfig := flag.String("config", "", "path to JSON config file")
 
+	var flagConfig string
+	flag.StringVar(&flagConfig, "config", "", "path to JSON config file")
+	flag.StringVar(&flagConfig, "c", "", "path to JSON config file -c")
 	flag.Parse()
 
 	// Определяем путь к конфигу (приоритет: Флаг > Env)
 	configPath := ""
-	if isFlagSet("config") {
-		configPath = *flagConfig
+	if config.IsFlagSet("config") || config.IsFlagSet("c") {
+		configPath = flagConfig
 	} else if envConfig := os.Getenv("CONFIG"); envConfig != "" {
 		configPath = envConfig
 	}
@@ -189,16 +150,16 @@ func main() {
 	}
 
 	// Применяем приоритеты для всех переменных
-	address := resolveString(*flagAddress, "ADDRESS", jsonCfg.Address, "localhost:8080", "a")
-	logLevel := resolveString(*flagLogLevel, "LOG_LEVEL", jsonCfg.LogLevel, "info", "l")
-	storeIntervalStr := resolveString(*flagStoreInterval, "STORE_INTERVAL", jsonCfg.StoreInterval, "300s", "i")
-	fileStoragePath := resolveString(*flagFileStoragePath, "FILE_STORAGE_PATH", jsonCfg.FileStoragePath, "metrics.json", "f")
-	restore := resolveBool(*flagRestore, "RESTORE", jsonCfg.Restore, false, "r")
-	databaseDSN := resolveString(*flagDatabaseDSN, "DATABASE_DSN", jsonCfg.DatabaseDSN, "", "d")
-	hashKey := resolveString(*flagHashKey, "KEY", jsonCfg.Key, "", "k")
-	cryptoKeyPath := resolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
-	auditFile := resolveString(*flagAuditFile, "AUDIT_FILE", jsonCfg.AuditFile, "", "audit-file")
-	auditURL := resolveString(*flagAuditURL, "AUDIT_URL", jsonCfg.AuditURL, "", "audit-url")
+	address := config.ResolveString(*flagAddress, "ADDRESS", jsonCfg.Address, "localhost:8080", "a")
+	logLevel := config.ResolveString(*flagLogLevel, "LOG_LEVEL", jsonCfg.LogLevel, "info", "l")
+	storeIntervalStr := config.ResolveString(*flagStoreInterval, "STORE_INTERVAL", jsonCfg.StoreInterval, "300s", "i")
+	fileStoragePath := config.ResolveString(*flagFileStoragePath, "FILE_STORAGE_PATH", jsonCfg.FileStoragePath, "metrics.json", "f")
+	restore := config.ResolveBool(*flagRestore, "RESTORE", jsonCfg.Restore, false, "r")
+	databaseDSN := config.ResolveString(*flagDatabaseDSN, "DATABASE_DSN", jsonCfg.DatabaseDSN, "", "d")
+	hashKey := config.ResolveString(*flagHashKey, "KEY", jsonCfg.Key, "", "k")
+	cryptoKeyPath := config.ResolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
+	auditFile := config.ResolveString(*flagAuditFile, "AUDIT_FILE", jsonCfg.AuditFile, "", "audit-file")
+	auditURL := config.ResolveString(*flagAuditURL, "AUDIT_URL", jsonCfg.AuditURL, "", "audit-url")
 
 	// Парсим интервал из строки в time.Duration
 	storeInterval, err := time.ParseDuration(storeIntervalStr)
@@ -207,7 +168,7 @@ func main() {
 	}
 
 	if initErr := Initialize(logLevel); initErr != nil {
-		panic(fmt.Errorf("failed to initialize logger: %w", initErr))
+		log.Fatalf("failed to initialize logger: %v", initErr)
 	}
 
 	defer func() {
@@ -246,7 +207,6 @@ func main() {
 		Log.Info("Используется файловое хранилище")
 	}
 
-	// СОЗДАНИЕ AUDIT MANAGER!
 	var auditManager *audit.Manager
 
 	if auditFile != "" || auditURL != "" {
@@ -320,9 +280,15 @@ func main() {
 	)
 	defer stop()
 
-	// pprof запускаем как раньше
+	//Создаем сервер для pprof для корректного завершения
+	pprofSrv := &http.Server{
+		Addr: "localhost:6060",
+	}
+
 	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
+		if err := pprofSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			Log.Error("Ошибка запуска pprof сервера", zap.Error(err))
+		}
 	}()
 
 	// Создаём http.Server вместо прямого вызова ListenAndServe
@@ -350,6 +316,13 @@ func main() {
 	// Graceful shutdown HTTP-сервера (дождётся завершения текущих запросов)
 	if shutdownErr := srv.Shutdown(shutdownCtx); shutdownErr != nil {
 		Log.Error("Ошибка при завершении сервера", zap.Error(shutdownErr))
+	}
+
+	// Корректная остановка pprof сервера
+	if pprofErr := pprofSrv.Shutdown(shutdownCtx); pprofErr != nil {
+		Log.Error("Ошибка при завершении pprof сервера", zap.Error(pprofErr))
+	} else {
+		Log.Info("pprof сервер корректно остановлен")
 	}
 
 	// Сохраняем несохранённые данные

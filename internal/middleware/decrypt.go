@@ -11,13 +11,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-)
 
-// Envelope должен совпадать со структурой на стороне агента
-type Envelope struct {
-	EncryptedKey  string `json:"encrypted_key"`
-	EncryptedData string `json:"encrypted_data"`
-}
+	"github.com/SilkovMax/go-musthave-metrics/internal/crypto"
+)
 
 // DecryptMiddleware расшифровывает тело запроса, используя гибридное шифрование (RSA + AES-GCM).
 func DecryptMiddleware(privKey *rsa.PrivateKey) func(http.Handler) http.Handler {
@@ -32,7 +28,7 @@ func DecryptMiddleware(privKey *rsa.PrivateKey) func(http.Handler) http.Handler 
 			_ = r.Body.Close()
 
 			// Пробуем распарсить как Envelope
-			var envelope Envelope
+			var envelope crypto.Envelope
 			if unmarshalErr := json.Unmarshal(encryptedBody, &envelope); unmarshalErr != nil {
 				// Если это не JSON-конверт, значит, данные пришли без шифрования
 				r.Body = io.NopCloser(bytes.NewReader(encryptedBody))
