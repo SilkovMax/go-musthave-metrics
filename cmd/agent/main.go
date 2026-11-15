@@ -161,21 +161,34 @@ func main() {
 	jobs := make(chan []model.Metrics, 100)
 
 	// Создаем errgroup, привязанный к контексту сигналов
-	g, _ := errgroup.WithContext(ctx)
+	g, gCtx := errgroup.WithContext(ctx)
 
 	for i := 1; i <= rateLimit; i++ {
 		workerID := i
 		g.Go(func() error {
-			// Воркер читает батчи из канала и отправляет их
-			for batch := range jobs {
-				if err := client.SendBatch(batch); err != nil {
-					fmt.Printf("[Worker %d] Ошибка batch-отправки: %v\n", workerID, err)
-				} else {
+			for {
+				select {
+				case <-gCtx.Done():
+					// Контекст группы отменен
+					fmt.Printf("[Worker %d] Завершение из-за отмены контекста\n", workerID)
+					return gCtx.Err()
+
+				case batch, ok := <-jobs:
+					if !ok {
+						// Канал закрыт — штатное завершение
+						fmt.Printf("[Worker %d] Завершён\n", workerID)
+						return nil
+					}
+
+					if err := client.SendBatch(batch); err != nil {
+						fmt.Printf("[Worker %d] Критическая ошибка: %v\n", workerID, err)
+						// Возвращаем ошибку — это отменит контекст для всех воркеров
+						return fmt.Errorf("worker %d failed: %w", workerID, err)
+					}
+
 					fmt.Printf("[Worker %d] Отправлено метрик: %d\n", workerID, len(batch))
 				}
 			}
-			fmt.Printf("[Worker %d] Завершён\n", workerID)
-			return nil
 		})
 	}
 
