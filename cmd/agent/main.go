@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"flag"
 	"fmt"
+	"net"
 	"os/signal"
 	"syscall"
 
@@ -152,7 +153,10 @@ func main() {
 	col := agent.NewCollector()
 
 	serverURL := fmt.Sprintf("http://%s", address)
-	client := agent.NewClient(serverURL, key, pubKey)
+
+	localIP := getLocalIP()
+
+	client := agent.NewClient(serverURL, key, pubKey, localIP)
 
 	pollDuration := pollInterval
 	reportDuration := reportInterval
@@ -307,4 +311,20 @@ func printBuildInfo() {
 	fmt.Printf("Build version: %s\n", version)
 	fmt.Printf("Build date: %s\n", date)
 	fmt.Printf("Build commit: %s\n", commit)
+}
+
+// getLocalIP пытается найти IP-адрес машины.
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "127.0.0.1"
 }
