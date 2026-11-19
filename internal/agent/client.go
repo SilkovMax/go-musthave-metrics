@@ -29,16 +29,23 @@ type Client struct {
 	client  *resty.Client
 	key     string
 	pubKey  *rsa.PublicKey
+	localIP string
 }
 
 // Создаем Http клиент с параметрами
-func NewClient(baseURL string, key string, pubKey *rsa.PublicKey) *Client {
-	return &Client{
+func NewClient(baseURL string, key string, pubKey *rsa.PublicKey, localIP string) *Client {
+	c := &Client{
 		baseURL: baseURL,
 		client:  resty.New(),
 		key:     key,
 		pubKey:  pubKey,
+		localIP: localIP,
 	}
+	if c.localIP != "" {
+		c.client.SetHeader("X-Real-IP", c.localIP)
+	}
+
+	return c
 }
 
 // computeHMAC вычисляет SHA256 HMAC от данных и возвращает hex-строку.

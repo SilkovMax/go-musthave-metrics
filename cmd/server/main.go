@@ -50,6 +50,7 @@ type ServerConfigJSON struct {
 	CryptoKey       *string `json:"crypto_key"`
 	AuditFile       *string `json:"audit_file"`
 	AuditURL        *string `json:"audit_url"`
+	TrustedSubnet   *string `json:"trusted_subnet"`
 }
 
 // loadPrivateKey загружает и парсит RSA приватный ключ из PEM-файла.
@@ -123,6 +124,7 @@ func main() {
 	flagDatabaseDSN := flag.String("d", "", "connect to DB")
 	flagHashKey := flag.String("k", "", "HMAC key for signing requests")
 	flagCryptoKey := flag.String("crypto-key", "", "path to private key file")
+	flagTrustedSubnet := flag.String("t", "", "trusted subnet in CIDR format")
 
 	var flagConfig string
 	flag.StringVar(&flagConfig, "config", "", "path to JSON config file")
@@ -160,6 +162,7 @@ func main() {
 	cryptoKeyPath := config.ResolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
 	auditFile := config.ResolveString(*flagAuditFile, "AUDIT_FILE", jsonCfg.AuditFile, "", "audit-file")
 	auditURL := config.ResolveString(*flagAuditURL, "AUDIT_URL", jsonCfg.AuditURL, "", "audit-url")
+	trustedSubnet := config.ResolveString(*flagTrustedSubnet, "TRUSTED_SUBNET", jsonCfg.TrustedSubnet, "", "t")
 
 	// Парсим интервал из строки в time.Duration
 	storeInterval, err := time.ParseDuration(storeIntervalStr)
@@ -241,6 +244,7 @@ func main() {
 	r.Use(middleware.GzipMiddleware)
 	r.Use(middleware.HashRequestMiddleware(hashKey))
 	r.Use(middleware.HashResponseMiddleware(hashKey))
+	r.Use(middleware.TrustedSubnetMiddleware(trustedSubnet))
 
 	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))
