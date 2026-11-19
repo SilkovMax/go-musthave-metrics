@@ -64,7 +64,7 @@ func BenchmarkSetBatch(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		storage.SetBatch(metrics)
+		_ = storage.SetBatch(metrics)
 	}
 }
 

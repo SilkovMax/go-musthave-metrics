@@ -4,6 +4,7 @@ import (
 	"time"
 )
 
+// generate:reset
 type AuditEvent struct {
 	Timestamp int64    `json:"ts"`
 	Metrics   []string `json:"metrics"`
