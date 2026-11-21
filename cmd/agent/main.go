@@ -30,6 +30,11 @@ var (
 	buildCommit  string
 )
 
+// BatchSender определяет интерфейс для отправки батчей метрик.
+type BatchSender interface {
+	SendBatch(metrics []model.Metrics) error
+}
+
 // Структура для парсинга JSON-конфига агента.
 type AgentConfigJSON struct {
 	Address        *string `json:"address"`
@@ -38,6 +43,7 @@ type AgentConfigJSON struct {
 	Key            *string `json:"key"`
 	RateLimit      *int    `json:"rate_limit"`
 	CryptoKey      *string `json:"crypto_key"`
+	GRPCAddress    *string `json:"grpc_address"`
 }
 
 // loadPublicKey загружает и парсит RSA публичный ключ из PEM-файла.
@@ -79,6 +85,7 @@ func main() {
 	flagKey := flag.String("k", "", "HMAC key for requests")
 	flagRateLimit := flag.Int("l", 1, "rate limit (number of workers)")
 	flagCryptoKey := flag.String("crypto-key", "", "path to public key file")
+	flagGRPCAddress := flag.String("grpc-address", "", "gRPC server address")
 
 	var flagConfig string
 	flag.StringVar(&flagConfig, "config", "", "path to JSON config file")
@@ -114,8 +121,8 @@ func main() {
 	key := config.ResolveString(*flagKey, "KEY", jsonCfg.Key, "", "k")
 	rateLimit := config.ResolveInt(*flagRateLimit, "RATE_LIMIT", jsonCfg.RateLimit, 1, "l")
 	cryptoKeyPath := config.ResolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
+	grpcAddress := config.ResolveString(*flagGRPCAddress, "GRPC_ADDRESS", jsonCfg.GRPCAddress, "", "grpc-address")
 
-	// Парсим интервалы из строки в time.Duration
 	reportInterval, err := time.ParseDuration(reportIntervalStr)
 	if err != nil {
 		fmt.Printf("Некорректный формат report_interval: %v\n", err)
@@ -155,8 +162,23 @@ func main() {
 	serverURL := fmt.Sprintf("http://%s", address)
 
 	localIP := getLocalIP()
+	fmt.Printf("Локальный IP агента: %s\n", localIP)
 
-	client := agent.NewClient(serverURL, key, pubKey, localIP)
+	var sender BatchSender
+
+	if grpcAddress != "" {
+		// Если задан grpc-адрес, используем grpc клиент
+		grpcClient, err := agent.NewGRPCClient(grpcAddress, localIP)
+		if err != nil {
+			log.Fatalf("Ошибка инициализации grpc клиента: %v", err)
+		}
+		sender = grpcClient
+		fmt.Println("Используется grpc транспорт для отправки метрик")
+	} else {
+		// Иначе используем HTTP клиент
+		sender = agent.NewClient(serverURL, key, pubKey, localIP)
+		fmt.Println("Используется HTTP транспорт для отправки метрик")
+	}
 
 	pollDuration := pollInterval
 	reportDuration := reportInterval
@@ -184,7 +206,7 @@ func main() {
 						return nil
 					}
 
-					if err := client.SendBatch(batch); err != nil {
+					if err := sender.SendBatch(batch); err != nil {
 						fmt.Printf("[Worker %d] Критическая ошибка: %v\n", workerID, err)
 						// Возвращаем ошибку — это отменит контекст для всех воркеров
 						return fmt.Errorf("worker %d failed: %w", workerID, err)
@@ -277,7 +299,7 @@ func main() {
 			case <-ctx.Done():
 				// Если сигнал пришёл в этот момент, отправляем последний батч синхронно
 				fmt.Println("Сигнал получен во время формирования батча. Отправляем синхронно...")
-				if err := client.SendBatch(batch); err != nil {
+				if err := sender.SendBatch(batch); err != nil {
 					fmt.Printf("Ошибка отправки последнего батча: %v\n", err)
 				}
 				close(jobs)

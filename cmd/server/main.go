@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -19,12 +20,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
+	internalgrpc "github.com/SilkovMax/go-musthave-metrics/internal/grpc"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
+	"github.com/SilkovMax/go-musthave-metrics/internal/proto"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
 )
 
@@ -51,6 +55,7 @@ type ServerConfigJSON struct {
 	AuditFile       *string `json:"audit_file"`
 	AuditURL        *string `json:"audit_url"`
 	TrustedSubnet   *string `json:"trusted_subnet"`
+	GRPCAddress     *string `json:"grpc_address"`
 }
 
 // loadPrivateKey загружает и парсит RSA приватный ключ из PEM-файла.
@@ -125,6 +130,7 @@ func main() {
 	flagHashKey := flag.String("k", "", "HMAC key for signing requests")
 	flagCryptoKey := flag.String("crypto-key", "", "path to private key file")
 	flagTrustedSubnet := flag.String("t", "", "trusted subnet in CIDR format")
+	flagGRPCAddress := flag.String("grpc-address", "", "gRPC server address")
 
 	var flagConfig string
 	flag.StringVar(&flagConfig, "config", "", "path to JSON config file")
@@ -163,6 +169,7 @@ func main() {
 	auditFile := config.ResolveString(*flagAuditFile, "AUDIT_FILE", jsonCfg.AuditFile, "", "audit-file")
 	auditURL := config.ResolveString(*flagAuditURL, "AUDIT_URL", jsonCfg.AuditURL, "", "audit-url")
 	trustedSubnet := config.ResolveString(*flagTrustedSubnet, "TRUSTED_SUBNET", jsonCfg.TrustedSubnet, "", "t")
+	grpcAddress := config.ResolveString(*flagGRPCAddress, "GRPC_ADDRESS", jsonCfg.GRPCAddress, "", "grpc-address")
 
 	// Парсим интервал из строки в time.Duration
 	storeInterval, err := time.ParseDuration(storeIntervalStr)
@@ -309,6 +316,30 @@ func main() {
 		}
 	}()
 
+	// Запуск grpc сервера
+	var grpcServer *grpc.Server
+	if grpcAddress != "" {
+		lis, err := net.Listen("tcp", grpcAddress)
+		if err != nil {
+			Log.Fatal("Не удалось запустить gRPC сервер", zap.Error(err))
+		}
+
+		// Создаем grpc сервер с нашим интерсептором для проверки IP
+		grpcServer = grpc.NewServer(
+			grpc.UnaryInterceptor(internalgrpc.TrustedSubnetInterceptor(trustedSubnet)),
+		)
+
+		// Регистрируем наш сервис, передавая ему хранилище и подсеть
+		proto.RegisterMetricsServer(grpcServer, internalgrpc.NewServer(storage, trustedSubnet))
+
+		go func() {
+			Log.Info("gRpc сервер запущен", zap.String("address", grpcAddress))
+			if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
+				Log.Error("Ошибка работы grpc сервера", zap.Error(err))
+			}
+		}()
+	}
+
 	// Блокируемся, пока не придёт сигнал
 	<-ctx.Done()
 	Log.Info("Получен сигнал завершения. Начинаем graceful shutdown...")
@@ -327,6 +358,13 @@ func main() {
 		Log.Error("Ошибка при завершении pprof сервера", zap.Error(pprofErr))
 	} else {
 		Log.Info("pprof сервер корректно остановлен")
+	}
+
+	// Остановка grpc server
+	if grpcServer != nil {
+		Log.Info("Останавливаем gRPC сервер")
+		grpcServer.GracefulStop()
+		Log.Info("gRPC сервер корректно остановлен")
 	}
 
 	// Сохраняем несохранённые данные
