@@ -32,7 +32,7 @@ var (
 
 // BatchSender определяет интерфейс для отправки батчей метрик.
 type BatchSender interface {
-	SendBatch(metrics []model.Metrics) error
+	SendBatch(ctx context.Context, metrics []model.Metrics) error
 }
 
 // Структура для парсинга JSON-конфига агента.
@@ -206,7 +206,7 @@ func main() {
 						return nil
 					}
 
-					if err := sender.SendBatch(batch); err != nil {
+					if err := sender.SendBatch(gCtx, batch); err != nil {
 						fmt.Printf("[Worker %d] Критическая ошибка: %v\n", workerID, err)
 						// Возвращаем ошибку — это отменит контекст для всех воркеров
 						return fmt.Errorf("worker %d failed: %w", workerID, err)
@@ -299,7 +299,7 @@ func main() {
 			case <-ctx.Done():
 				// Если сигнал пришёл в этот момент, отправляем последний батч синхронно
 				fmt.Println("Сигнал получен во время формирования батча. Отправляем синхронно...")
-				if err := sender.SendBatch(batch); err != nil {
+				if err := sender.SendBatch(ctx, batch); err != nil {
 					fmt.Printf("Ошибка отправки последнего батча: %v\n", err)
 				}
 				close(jobs)

@@ -43,7 +43,7 @@ func NewGRPCClient(address, localIP string) (*GRPCClient, error) {
 }
 
 // SendBatch отправляет батч метрик через grpc
-func (c *GRPCClient) SendBatch(metrics []model.Metrics) error {
+func (c *GRPCClient) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	var protoMetrics []*proto.Metric
 
 	// Преобразуем метрики в proto.Metric
@@ -66,7 +66,7 @@ func (c *GRPCClient) SendBatch(metrics []model.Metrics) error {
 		Metrics: protoMetrics,
 	}
 
-	_, err := c.client.UpdateMetrics(context.Background(), req)
+	_, err := c.client.UpdateMetrics(ctx, req)
 	return err
 }
 

@@ -1,7 +1,8 @@
-package grpc
+package transportgrpc
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 
@@ -18,15 +19,13 @@ import (
 // Server реализует grpc сервис Metrics
 type Server struct {
 	proto.UnimplementedMetricsServer
-	storage       repository.Storage
-	trustedSubnet string
+	storage repository.Storage
 }
 
 // NewServer создает новый grpc сервер
-func NewServer(storage repository.Storage, trustedSubnet string) *Server {
+func NewServer(storage repository.Storage) *Server {
 	return &Server{
-		storage:       storage,
-		trustedSubnet: trustedSubnet,
+		storage: storage,
 	}
 }
 
@@ -58,28 +57,36 @@ func (s *Server) UpdateMetrics(ctx context.Context, req *proto.UpdateMetricsRequ
 }
 
 // TrustedSubnetInterceptor проверяет IP из метаданных
-func TrustedSubnetInterceptor(trustedSubnet string) grpc.UnaryServerInterceptor {
+func TrustedSubnetInterceptor(trustedSubnet string) (grpc.UnaryServerInterceptor, error) {
+	var subnet *net.IPNet
+	if trustedSubnet != "" {
+		var err error
+		_, subnet, err = net.ParseCIDR(trustedSubnet)
+		if err != nil {
+			return nil, fmt.Errorf("Некорректный формат CIDR доверенной подсети %q: %w", trustedSubnet, err)
+		}
+	}
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		// Если подсеть не задана, пропускаем
-		if trustedSubnet == "" {
+		if subnet == nil {
 			return handler(ctx, req)
 		}
 
 		// Читаем метаданные
 		md, ok := metadata.FromIncomingContext(ctx)
 		if !ok {
-			return nil, status.Errorf(codes.Unauthenticated, "отсутствуют метаданные")
+			return nil, status.Errorf(codes.PermissionDenied, "отсутствуют метаданные")
 		}
 
 		// Берем наш заголовок
 		ips := md.Get("x-real-ip")
 		if len(ips) == 0 {
-			return nil, status.Errorf(codes.Unauthenticated, "отсутствует заголовок x-real-ip")
+			return nil, status.Errorf(codes.PermissionDenied, "отсутствует заголовок x-real-ip")
 		}
 
 		clientIP := net.ParseIP(ips[0])
 		if clientIP == nil {
-			return nil, status.Errorf(codes.InvalidArgument, "неверный формат IP")
+			return nil, status.Errorf(codes.PermissionDenied, "неверный формат IP")
 		}
 
 		_, subnet, err := net.ParseCIDR(trustedSubnet)
@@ -92,5 +99,5 @@ func TrustedSubnetInterceptor(trustedSubnet string) grpc.UnaryServerInterceptor 
 		}
 
 		return handler(ctx, req)
-	}
+	}, nil
 }

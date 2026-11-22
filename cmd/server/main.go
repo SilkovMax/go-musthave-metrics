@@ -25,11 +25,11 @@ import (
 	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
-	internalgrpc "github.com/SilkovMax/go-musthave-metrics/internal/grpc"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
 	"github.com/SilkovMax/go-musthave-metrics/internal/proto"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
+	transportgrpc "github.com/SilkovMax/go-musthave-metrics/internal/transport/grpc"
 )
 
 // Глобальные переменные для информации о сборке.
@@ -248,12 +248,10 @@ func main() {
 		r.Use(middleware.DecryptMiddleware(privKey))
 	}
 
+	// Глобавльные мидлваре
 	r.Use(middleware.GzipMiddleware)
 	r.Use(middleware.HashRequestMiddleware(hashKey))
 	r.Use(middleware.HashResponseMiddleware(hashKey))
-	r.Use(middleware.TrustedSubnetMiddleware(trustedSubnet))
-
-	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))
 
 	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -266,20 +264,26 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	r.Post("/update", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP)
-	r.Post("/update/", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP) //для автотеста
-
-	r.Post("/updates", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
-	r.Post("/updates/", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
-
 	r.Post("/value", handler.NewValueJSONHandler(storage).ServeHTTP)
 	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP) //для автотеста
-
-	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage, auditManager).ServeHTTP)
-
 	r.Get("/value/{type}/{name}", handler.NewValueHandler(storage).ServeHTTP)
-
 	r.Get("/", handler.NewIndexHandler(storage).ServeHTTP)
+
+	trustedSubnetMW, err := middleware.TrustedSubnetMiddleware(trustedSubnet)
+	if err != nil {
+		Log.Fatal("Ошибка конфигурации trusted_subnet", zap.Error(err))
+	}
+
+	r.Group(func(r chi.Router) {
+
+		r.Use(trustedSubnetMW)
+
+		r.Post("/update", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP)
+		r.Post("/update/", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP) //для автотеста
+		r.Post("/updates", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
+		r.Post("/updates/", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
+		r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage, auditManager).ServeHTTP)
+	})
 
 	Log.Info("Сервер запущен", zap.String("address", address))
 
@@ -325,12 +329,17 @@ func main() {
 		}
 
 		// Создаем grpc сервер с нашим интерсептором для проверки IP
+		grpcInterceptor, err := transportgrpc.TrustedSubnetInterceptor(trustedSubnet)
+		if err != nil {
+			Log.Fatal("Ошибка конфигурации trusted_subnet для gRPC", zap.Error(err))
+		}
+
 		grpcServer = grpc.NewServer(
-			grpc.UnaryInterceptor(internalgrpc.TrustedSubnetInterceptor(trustedSubnet)),
+			grpc.UnaryInterceptor(grpcInterceptor),
 		)
 
 		// Регистрируем наш сервис, передавая ему хранилище и подсеть
-		proto.RegisterMetricsServer(grpcServer, internalgrpc.NewServer(storage, trustedSubnet))
+		proto.RegisterMetricsServer(grpcServer, transportgrpc.NewServer(storage))
 
 		go func() {
 			Log.Info("gRpc сервер запущен", zap.String("address", grpcAddress))

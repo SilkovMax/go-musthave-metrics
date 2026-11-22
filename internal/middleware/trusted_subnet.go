@@ -1,17 +1,26 @@
 package middleware
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 )
 
 // TrustedSubnetMiddleware проверяет, что IP клиента входит в доверенную подсеть
-func TrustedSubnetMiddleware(trustedSubnet string) func(http.Handler) http.Handler {
+func TrustedSubnetMiddleware(trustedSubnet string) (func(http.Handler) http.Handler, error) {
+	var subnet *net.IPNet
+	if trustedSubnet != "" {
+		var err error
+		_, subnet, err = net.ParseCIDR(trustedSubnet)
+		if err != nil {
+			return nil, fmt.Errorf("некорректный формат CIDR доверенной подсети %q: %w", trustedSubnet, err)
+		}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Если подсеть не задана, пропускаем все запросы
-			if trustedSubnet == "" {
+			if subnet == nil {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -22,15 +31,6 @@ func TrustedSubnetMiddleware(trustedSubnet string) func(http.Handler) http.Handl
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
-
-			// Парсим подсеть
-			_, subnet, err := net.ParseCIDR(trustedSubnet)
-			if err != nil {
-				log.Printf("Ошибка парсинга подсети %s: %v", trustedSubnet, err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
-
 			// Парсим IP клиента
 			ip := net.ParseIP(clientIP)
 			if ip == nil {
@@ -49,5 +49,5 @@ func TrustedSubnetMiddleware(trustedSubnet string) func(http.Handler) http.Handl
 			// IP в доверенной подсети, пропускаем запрос
 			next.ServeHTTP(w, r)
 		})
-	}
+	}, nil
 }

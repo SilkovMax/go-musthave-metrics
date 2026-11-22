@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -188,7 +189,7 @@ func (c *Client) SendMetric(m model.Metrics) error {
 }
 
 // SendBatch отправляет батч метрик с gzip и опциональным шифрованием
-func (c *Client) SendBatch(metrics []model.Metrics) error {
+func (c *Client) SendBatch(ctx context.Context, metrics []model.Metrics) error {
 	if len(metrics) == 0 {
 		return nil
 	}
