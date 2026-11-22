@@ -63,7 +63,7 @@ func TrustedSubnetInterceptor(trustedSubnet string) (grpc.UnaryServerInterceptor
 		var err error
 		_, subnet, err = net.ParseCIDR(trustedSubnet)
 		if err != nil {
-			return nil, fmt.Errorf("Некорректный формат CIDR доверенной подсети %q: %w", trustedSubnet, err)
+			return nil, fmt.Errorf("некорректный формат CIDR доверенной подсети %q: %w", trustedSubnet, err)
 		}
 	}
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
