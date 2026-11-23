@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -19,13 +20,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/SilkovMax/go-musthave-metrics/internal/audit"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config"
 	"github.com/SilkovMax/go-musthave-metrics/internal/config/db"
 	"github.com/SilkovMax/go-musthave-metrics/internal/handler"
 	"github.com/SilkovMax/go-musthave-metrics/internal/middleware"
+	"github.com/SilkovMax/go-musthave-metrics/internal/proto"
 	"github.com/SilkovMax/go-musthave-metrics/internal/repository"
+	transportgrpc "github.com/SilkovMax/go-musthave-metrics/internal/transport/grpc"
 )
 
 // Глобальные переменные для информации о сборке.
@@ -50,6 +54,8 @@ type ServerConfigJSON struct {
 	CryptoKey       *string `json:"crypto_key"`
 	AuditFile       *string `json:"audit_file"`
 	AuditURL        *string `json:"audit_url"`
+	TrustedSubnet   *string `json:"trusted_subnet"`
+	GRPCAddress     *string `json:"grpc_address"`
 }
 
 // loadPrivateKey загружает и парсит RSA приватный ключ из PEM-файла.
@@ -123,6 +129,8 @@ func main() {
 	flagDatabaseDSN := flag.String("d", "", "connect to DB")
 	flagHashKey := flag.String("k", "", "HMAC key for signing requests")
 	flagCryptoKey := flag.String("crypto-key", "", "path to private key file")
+	flagTrustedSubnet := flag.String("t", "", "trusted subnet in CIDR format")
+	flagGRPCAddress := flag.String("grpc-address", "", "gRPC server address")
 
 	var flagConfig string
 	flag.StringVar(&flagConfig, "config", "", "path to JSON config file")
@@ -160,6 +168,8 @@ func main() {
 	cryptoKeyPath := config.ResolveString(*flagCryptoKey, "CRYPTO_KEY", jsonCfg.CryptoKey, "", "crypto-key")
 	auditFile := config.ResolveString(*flagAuditFile, "AUDIT_FILE", jsonCfg.AuditFile, "", "audit-file")
 	auditURL := config.ResolveString(*flagAuditURL, "AUDIT_URL", jsonCfg.AuditURL, "", "audit-url")
+	trustedSubnet := config.ResolveString(*flagTrustedSubnet, "TRUSTED_SUBNET", jsonCfg.TrustedSubnet, "", "t")
+	grpcAddress := config.ResolveString(*flagGRPCAddress, "GRPC_ADDRESS", jsonCfg.GRPCAddress, "", "grpc-address")
 
 	// Парсим интервал из строки в time.Duration
 	storeInterval, err := time.ParseDuration(storeIntervalStr)
@@ -238,11 +248,10 @@ func main() {
 		r.Use(middleware.DecryptMiddleware(privKey))
 	}
 
+	// Глобавльные мидлваре
 	r.Use(middleware.GzipMiddleware)
 	r.Use(middleware.HashRequestMiddleware(hashKey))
 	r.Use(middleware.HashResponseMiddleware(hashKey))
-
-	//запускаю логировангие для каждого запроса
 	r.Use(middleware.LoggingMiddleware(Log))
 
 	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -255,20 +264,26 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	r.Post("/update", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP)
-	r.Post("/update/", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP) //для автотеста
-
-	r.Post("/updates", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
-	r.Post("/updates/", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
-
 	r.Post("/value", handler.NewValueJSONHandler(storage).ServeHTTP)
 	r.Post("/value/", handler.NewValueJSONHandler(storage).ServeHTTP) //для автотеста
-
-	r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage, auditManager).ServeHTTP)
-
 	r.Get("/value/{type}/{name}", handler.NewValueHandler(storage).ServeHTTP)
-
 	r.Get("/", handler.NewIndexHandler(storage).ServeHTTP)
+
+	trustedSubnetMW, err := middleware.TrustedSubnetMiddleware(trustedSubnet)
+	if err != nil {
+		Log.Fatal("Ошибка конфигурации trusted_subnet", zap.Error(err))
+	}
+
+	r.Group(func(r chi.Router) {
+
+		r.Use(trustedSubnetMW)
+
+		r.Post("/update", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP)
+		r.Post("/update/", handler.NewUpdateJSONHandler(storage, auditManager).ServeHTTP) //для автотеста
+		r.Post("/updates", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
+		r.Post("/updates/", handler.NewUpdatesHandler(storage, auditManager).ServeHTTP)
+		r.Post("/update/{type}/{name}/{value}", handler.NewUpdateHandler(storage, auditManager).ServeHTTP)
+	})
 
 	Log.Info("Сервер запущен", zap.String("address", address))
 
@@ -305,6 +320,35 @@ func main() {
 		}
 	}()
 
+	// Запуск grpc сервера
+	var grpcServer *grpc.Server
+	if grpcAddress != "" {
+		lis, err := net.Listen("tcp", grpcAddress)
+		if err != nil {
+			Log.Fatal("Не удалось запустить gRPC сервер", zap.Error(err))
+		}
+
+		// Создаем grpc сервер с нашим интерсептором для проверки IP
+		grpcInterceptor, err := transportgrpc.TrustedSubnetInterceptor(trustedSubnet)
+		if err != nil {
+			Log.Fatal("Ошибка конфигурации trusted_subnet для gRPC", zap.Error(err))
+		}
+
+		grpcServer = grpc.NewServer(
+			grpc.UnaryInterceptor(grpcInterceptor),
+		)
+
+		// Регистрируем наш сервис, передавая ему хранилище и подсеть
+		proto.RegisterMetricsServer(grpcServer, transportgrpc.NewServer(storage))
+
+		go func() {
+			Log.Info("gRpc сервер запущен", zap.String("address", grpcAddress))
+			if err := grpcServer.Serve(lis); err != nil && err != grpc.ErrServerStopped {
+				Log.Error("Ошибка работы grpc сервера", zap.Error(err))
+			}
+		}()
+	}
+
 	// Блокируемся, пока не придёт сигнал
 	<-ctx.Done()
 	Log.Info("Получен сигнал завершения. Начинаем graceful shutdown...")
@@ -323,6 +367,13 @@ func main() {
 		Log.Error("Ошибка при завершении pprof сервера", zap.Error(pprofErr))
 	} else {
 		Log.Info("pprof сервер корректно остановлен")
+	}
+
+	// Остановка grpc server
+	if grpcServer != nil {
+		Log.Info("Останавливаем gRPC сервер")
+		grpcServer.GracefulStop()
+		Log.Info("gRPC сервер корректно остановлен")
 	}
 
 	// Сохраняем несохранённые данные
